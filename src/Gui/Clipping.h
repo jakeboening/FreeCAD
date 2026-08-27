@@ -38,6 +38,15 @@ namespace Dialog
 {
 
 /**
+ * Editor for the clipping of one 3D view.
+ *
+ * The planes themselves live in the viewer (Gui::ViewClipping), not here, so
+ * they outlive this panel and can be saved with the document.  This class is a
+ * pure editor over that state: every handler writes one field through
+ * ViewClipping::setPlane(), and syncFromState() pushes the result back into the
+ * widgets when ViewClipping::signalChanged fires.  Reopening the panel
+ * therefore shows the clipping that is already active instead of resetting it.
+ *
  * @author Werner Mayer
  */
 class GuiExport Clipping: public QDialog
@@ -68,11 +77,15 @@ protected:
     void onDirXValueChanged(double);
     void onDirYValueChanged(double);
     void onDirZValueChanged(double);
+    void onClearAllClicked();
 
 public:
     void reject() override;
 
 private:
+    /// Pushes the viewer's clipping state into every widget, without echoing back.
+    void syncFromState();
+
     class Private;
     Private* d;
 };

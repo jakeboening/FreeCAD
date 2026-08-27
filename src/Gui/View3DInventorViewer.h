@@ -109,6 +109,7 @@ class GLGraphicsItem;
 class RubberbandOverlay;
 class SoShapeScale;
 class ViewerEventFilter;
+class ViewClipping;
 
 /** GUI view into a 3D scene provided by View3DInventor
  *
@@ -290,6 +291,14 @@ public:
     SoNode* getEditingRoot() const;
     /// Group the clipping planes live in, ahead of the model geometry.
     SoGroup* getClipPlaneGroup() const;
+    /** Clipping of this view: the planes, their cap settings and their state.
+     *
+     * Created on first use. It lives here rather than in the Clipping panel so
+     * that it outlives the panel and can be saved with the document.
+     */
+    ViewClipping& clipping();
+    /// True when clipping exists, for callers that must not bring it into being.
+    bool hasClipping() const;
     /// Group holding the view providers of the physical objects.
     SoGroup* getObjectGroup() const;
     void setupEditingRoot(SoNode* node = nullptr, const Base::Matrix4D* mat = nullptr);
@@ -679,6 +688,7 @@ private:
     // objectGroup, so the planes clip the model but leave the editing root, the
     // dimensions and the on-top selection alone.
     SoGroup* clipGroup;
+    std::unique_ptr<ViewClipping> clippingState;
     // Child group in the scene graph that contains view providers related to the physical object
     SoGroup* objectGroup;
 

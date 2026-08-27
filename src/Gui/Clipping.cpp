@@ -23,84 +23,144 @@
 #include <limits>
 #include <functional>
 
+#include <Inventor/SbVec3f.h>
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
-#include <Inventor/nodes/SoClipPlane.h>
-#include <Inventor/nodes/SoGroup.h>
-#include <Inventor/sensors/SoTimerSensor.h>
+#include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QDoubleSpinBox>
 #include <QPointer>
+#include <QPushButton>
 
 #include <App/Application.h>
 
 #include "Clipping.h"
 #include "ui_Clipping.h"
+#include "ClippingState.h"
 #include "DockWindowManager.h"
 #include "View3DInventor.h"
 #include "View3DInventorViewer.h"
+#include "ViewClipping.h"
 
 using namespace Gui::Dialog;
+
+namespace
+{
+
+/**
+ * Writes a spin box only when it would actually change.
+ *
+ * Every widget edit round-trips through the viewer and comes back as
+ * signalChanged, so a blind setValue() would re-format the text of the box the
+ * user is typing into and move the caret. Comparing first turns that round trip
+ * into a no-op.
+ */
+void setSpinBoxValue(QDoubleSpinBox* box, double value)
+{
+    if (box->value() != value) {
+        box->setValue(value);
+    }
+}
+
+/**
+ * Same, for a field the state keeps as float.
+ *
+ * The comparison has to happen in float, or the double -> float -> double round
+ * trip of what the user typed would never compare equal and the box would be
+ * rewritten on every keystroke.
+ */
+void setSpinBoxValue(QDoubleSpinBox* box, float value)
+{
+    if (static_cast<float>(box->value()) != value) {
+        box->setValue(value);
+    }
+}
+
+}  // namespace
 
 class Clipping::Private
 {
 public:
     Ui_Clipping ui;
     QPointer<Gui::View3DInventor> view;
-    SoGroup* node;
-    SoClipPlane* clipX;
-    SoClipPlane* clipY;
-    SoClipPlane* clipZ;
-    SoClipPlane* clipView;
-    bool flipX {false};
-    bool flipY {false};
-    bool flipZ {false};
-    SoTimerSensor* sensor;
     App::Document* shownOn {nullptr};
     QDockWidget* dockWidget {nullptr};
+    QPushButton* clearButton {nullptr};
+    /// Set while syncFromState() drives the widgets, so their signals do not
+    /// bounce straight back into the viewer as edits.
+    bool updating {false};
     fastsignals::scoped_connection activeDocConnection;
+    fastsignals::scoped_connection clippingConnection;
 
-    Private()
+    /// The clipping this panel edits, or nullptr once its view has gone away.
+    Gui::ViewClipping* clipping() const
     {
-        clipX = new SoClipPlane();
-        clipX->on.setValue(false);
-        clipX->plane.setValue(SbPlane(SbVec3f(1, 0, 0), 0));
-        clipX->ref();
-
-        clipY = new SoClipPlane();
-        clipY->on.setValue(false);
-        clipY->plane.setValue(SbPlane(SbVec3f(0, 1, 0), 0));
-        clipY->ref();
-
-        clipZ = new SoClipPlane();
-        clipZ->on.setValue(false);
-        clipZ->plane.setValue(SbPlane(SbVec3f(0, 0, 1), 0));
-        clipZ->ref();
-
-        clipView = new SoClipPlane();
-        clipView->on.setValue(false);
-        clipView->plane.setValue(SbPlane(SbVec3f(0, 0, 1), 0));
-        clipView->ref();
-
-        node = nullptr;
-        sensor = new SoTimerSensor(moveCallback, this);
+        return view ? &view->getViewer()->clipping() : nullptr;
     }
-    ~Private()
+
+    /// Reads one plane out of the state, hands it to @a mutate, and writes it back.
+    template<class Mutator>
+    void editPlane(int slot, Mutator mutate)
     {
-        clipX->unref();
-        clipY->unref();
-        clipZ->unref();
-        clipView->unref();
-        delete sensor;
-    }
-    static void moveCallback(void* data, SoSensor* sensor)
-    {
-        Q_UNUSED(sensor);
-        auto self = static_cast<Private*>(data);
-        if (self->view) {
-            Gui::View3DInventorViewer* view = self->view->getViewer();
-            SoClipPlane* clip = self->clipView;
-            SbPlane pln = clip->plane.getValue();
-            clip->plane.setValue(SbPlane(view->getViewDirection(), pln.getDistanceFromOrigin()));
+        Gui::ViewClipping* clip = clipping();
+        if (!clip) {
+            return;
         }
+
+        Gui::ClipPlaneState plane = clip->state().planes[slot];
+        mutate(plane);
+        clip->setPlane(slot, plane);
+    }
+
+    /**
+     * Switches a slot off, but only when it is on.
+     *
+     * A redundant setPlane() would still fire signalChanged, and syncFromState()
+     * would then walk the widgets back over the click that is still being
+     * handled - correct in the end, but for no reason.
+     */
+    void disablePlane(int slot)
+    {
+        Gui::ViewClipping* clip = clipping();
+        if (!clip || !clip->state().planes[slot].enabled) {
+            return;
+        }
+
+        editPlane(slot, [](Gui::ClipPlaneState& plane) {
+            plane.enabled = false;
+        });
+    }
+
+    /**
+     * The three direction boxes are one vector, so each of them writes all three.
+     *
+     * The vector is stored as typed rather than normalised: normalising here
+     * would push a different number back into the very box the user is typing
+     * into. ViewClipping normalises on the way into Coin, which is where it
+     * matters.
+     */
+    void applyViewDirection()
+    {
+        const SbVec3f normal(ui.dirX->value(), ui.dirY->value(), ui.dirZ->value());
+        if (normal.sqrLength() <= 0.0F) {
+            // A vector that is still being typed can pass through zero. Keep the
+            // last usable direction rather than storing one that means nothing.
+            return;
+        }
+
+        editPlane(Gui::ClipPlaneState::SlotCustom, [&normal](Gui::ClipPlaneState& plane) {
+            plane.normal[0] = normal[0];
+            plane.normal[1] = normal[1];
+            plane.normal[2] = normal[2];
+        });
+    }
+
+    /// dirX/Y/Z and "From view" mean nothing while the plane tracks the camera.
+    void setViewDirWidgetsEnabled(bool followViewDir)
+    {
+        ui.dirX->setDisabled(followViewDir);
+        ui.dirY->setDisabled(followViewDir);
+        ui.dirZ->setDisabled(followViewDir);
+        ui.fromView->setDisabled(followViewDir);
     }
 };
 
@@ -112,6 +172,17 @@ Clipping::Clipping(Gui::View3DInventor* view, App::Document* showOn, QWidget* pa
 {
     // create widgets
     d->ui.setupUi(this);
+
+    // Closing the panel no longer throws the clipping away - the viewer owns it
+    // now - so the user needs somewhere to say "off". Added from code rather
+    // than from the .ui because the button wants a verb that the standard Reset
+    // text does not carry.
+    d->clearButton = d->ui.buttonBox->addButton(QDialogButtonBox::Reset);
+    d->clearButton->setText(tr("Clear all"));
+    d->clearButton->setToolTip(tr("Switches off every clipping plane of this view"));
+
+    d->shownOn = showOn;
+    d->view = view;
     setupConnections();
 
     constexpr int max = std::numeric_limits<int>::max();
@@ -130,31 +201,27 @@ Clipping::Clipping(Gui::View3DInventor* view, App::Document* showOn, QWidget* pa
     d->ui.dirY->setSingleStep(0.1f);
     d->ui.dirZ->setRange(-max, max);
     d->ui.dirZ->setSingleStep(0.1f);
-    d->ui.dirZ->setValue(1.0f);
-    d->shownOn = showOn;
 
-    d->view = view;
     View3DInventorViewer* viewer = view->getViewer();
-    // The viewer keeps a group for these, sitting just ahead of the model
-    // geometry: the planes clip the model, and leave the editing root, the
-    // dimensions and the on-top selection alone.
-    d->node = viewer->getClipPlaneGroup();
-    d->node->ref();
-    d->node->addChild(d->clipX);
-    d->node->addChild(d->clipY);
-    d->node->addChild(d->clipZ);
-    d->node->addChild(d->clipView);
+    ViewClipping& clipping = viewer->clipping();
 
     SoGetBoundingBoxAction action(viewer->getSoRenderManager()->getViewportRegion());
     action.apply(viewer->getSceneGraph());
     SbBox3f box = action.getBoundingBox();
 
     if (!box.isEmpty()) {
-        SbVec3f cnt = box.getCenter();
-        d->ui.clipView->setValue(cnt[2]);
-        d->ui.clipX->setValue(cnt[0]);
-        d->ui.clipY->setValue(cnt[1]);
-        d->ui.clipZ->setValue(cnt[2]);
+        // The offsets are state, so they are only seeded while there is nothing
+        // to preserve: the panel now reopens onto the clipping that is already
+        // active, and dragging every plane back to the centre of the scene each
+        // time would defeat the point. The steps and decimals below are
+        // presentation, not state, and always follow the scene.
+        if (clipping.state().isDefault()) {
+            SbVec3f cnt = box.getCenter();
+            d->ui.clipView->setValue(cnt[2]);
+            d->ui.clipX->setValue(cnt[0]);
+            d->ui.clipY->setValue(cnt[1]);
+            d->ui.clipZ->setValue(cnt[2]);
+        }
 
         int minDecimals = 2;
         float lenx, leny, lenz;
@@ -195,6 +262,10 @@ Clipping::Clipping(Gui::View3DInventor* view, App::Document* showOn, QWidget* pa
         d->ui.clipY->setDecimals(minDecimals);
         d->ui.clipZ->setDecimals(minDecimals);
     }
+
+    // Show whatever the view is already clipped by. This also supplies the
+    // custom plane's default +Z direction, which the viewer seeds.
+    syncFromState();
 }
 
 Clipping* Clipping::makeDockWidget(Gui::View3DInventor* view, App::Document* showOn)
@@ -213,17 +284,22 @@ Clipping* Clipping::makeDockWidget(Gui::View3DInventor* view, App::Document* sho
 /** Destroys the object and frees any allocated resources */
 Clipping::~Clipping()
 {
+    // The planes belong to the viewer and stay behind; only the two
+    // subscriptions are ours to give up.
     d->activeDocConnection.disconnect();
-    d->node->removeChild(d->clipX);
-    d->node->removeChild(d->clipY);
-    d->node->removeChild(d->clipZ);
-    d->node->removeChild(d->clipView);
-    d->node->unref();
+    d->clippingConnection.disconnect();
     delete d;
 }
 
 void Clipping::setupConnections()
 {
+    // Re-read the state whenever it changes, wherever the change came from:
+    // this panel, the Clear all button, or a document restore.
+    if (ViewClipping* clipping = d->clipping()) {
+        d->clippingConnection =
+            clipping->signalChanged.connect(std::bind(&Clipping::syncFromState, this));
+    }
+
     // clang-format off
     d->activeDocConnection = App::GetApplication().signalActiveDocument.connect(
             std::bind(&Clipping::onActiveDocument, this, std::placeholders::_1));
@@ -259,7 +335,53 @@ void Clipping::setupConnections()
             this, &Clipping::onDirYValueChanged);
     connect(d->ui.dirZ, qOverload<double>(&QDoubleSpinBox::valueChanged),
             this, &Clipping::onDirZValueChanged);
+    connect(d->clearButton, &QPushButton::clicked,
+            this, &Clipping::onClearAllClicked);
     // clang-format on
+}
+
+void Clipping::syncFromState()
+{
+    ViewClipping* clipping = d->clipping();
+    if (!clipping) {
+        return;
+    }
+
+    const ClippingState& state = clipping->state();
+
+    // The writes below emit exactly the signals the handlers listen to. The
+    // guard makes those echoes no-ops, which leaves the viewer's state as the
+    // one source of truth and keeps the two sides from driving each other.
+    d->updating = true;
+
+    const ClipPlaneState& planeX = state.planes[ClipPlaneState::SlotX];
+    d->ui.groupBoxX->setChecked(planeX.enabled);
+    setSpinBoxValue(d->ui.clipX, planeX.offset);
+
+    const ClipPlaneState& planeY = state.planes[ClipPlaneState::SlotY];
+    d->ui.groupBoxY->setChecked(planeY.enabled);
+    setSpinBoxValue(d->ui.clipY, planeY.offset);
+
+    const ClipPlaneState& planeZ = state.planes[ClipPlaneState::SlotZ];
+    d->ui.groupBoxZ->setChecked(planeZ.enabled);
+    setSpinBoxValue(d->ui.clipZ, planeZ.offset);
+
+    const ClipPlaneState& custom = state.planes[ClipPlaneState::SlotCustom];
+    d->ui.groupBoxView->setChecked(custom.enabled);
+    setSpinBoxValue(d->ui.clipView, custom.offset);
+    setSpinBoxValue(d->ui.dirX, custom.normal[0]);
+    setSpinBoxValue(d->ui.dirY, custom.normal[1]);
+    setSpinBoxValue(d->ui.dirZ, custom.normal[2]);
+    d->ui.adjustViewdirection->setChecked(custom.followViewDir);
+    // After groupBoxView, whose own checked state enables and disables its
+    // children wholesale and would otherwise undo this - and only while it is
+    // checked, since re-enabling "From view" under an unchecked group box would
+    // offer the user a button that edits a plane that is switched off.
+    if (custom.enabled) {
+        d->setViewDirWidgetsEnabled(custom.followViewDir);
+    }
+
+    d->updating = false;
 }
 
 void Clipping::reject()
@@ -282,150 +404,220 @@ void Clipping::onActiveDocument(const App::Document& doc)
         d->dockWidget->hide();
     }
 }
+
+/**
+ * The three axis planes and the custom-direction plane are mutually exclusive,
+ * so switching one side on switches the other off.
+ *
+ * This goes through the state rather than through the other group boxes'
+ * setChecked(), so that the widgets only ever move in one direction - state to
+ * widget, in syncFromState() - and the exclusion cannot depend on the order in
+ * which nested toggled() signals happen to arrive.
+ */
 void Clipping::onGroupBoxXToggled(bool on)
 {
-    if (on) {
-        d->ui.groupBoxView->setChecked(false);
+    if (d->updating) {
+        return;
     }
 
-    d->clipX->on.setValue(on);
+    if (on) {
+        d->disablePlane(ClipPlaneState::SlotCustom);
+    }
+
+    d->editPlane(ClipPlaneState::SlotX, [on](ClipPlaneState& plane) {
+        plane.enabled = on;
+    });
 }
 
 void Clipping::onGroupBoxYToggled(bool on)
 {
-    if (on) {
-        d->ui.groupBoxView->setChecked(false);
+    if (d->updating) {
+        return;
     }
 
-    d->clipY->on.setValue(on);
+    if (on) {
+        d->disablePlane(ClipPlaneState::SlotCustom);
+    }
+
+    d->editPlane(ClipPlaneState::SlotY, [on](ClipPlaneState& plane) {
+        plane.enabled = on;
+    });
 }
 
 void Clipping::onGroupBoxZToggled(bool on)
 {
-    if (on) {
-        d->ui.groupBoxView->setChecked(false);
+    if (d->updating) {
+        return;
     }
 
-    d->clipZ->on.setValue(on);
+    if (on) {
+        d->disablePlane(ClipPlaneState::SlotCustom);
+    }
+
+    d->editPlane(ClipPlaneState::SlotZ, [on](ClipPlaneState& plane) {
+        plane.enabled = on;
+    });
 }
 
 void Clipping::onClipXValueChanged(double val)
 {
-    SbPlane pln = d->clipX->plane.getValue();
-    d->clipX->plane.setValue(SbPlane(pln.getNormal(), d->flipX ? -val : val));
+    if (d->updating) {
+        return;
+    }
+
+    // The offset is stored as the user typed it; the flip is applied further
+    // down, where the plane reaches Coin.
+    d->editPlane(ClipPlaneState::SlotX, [val](ClipPlaneState& plane) {
+        plane.offset = val;
+    });
 }
 
 void Clipping::onClipYValueChanged(double val)
 {
-    SbPlane pln = d->clipY->plane.getValue();
-    d->clipY->plane.setValue(SbPlane(pln.getNormal(), d->flipY ? -val : val));
+    if (d->updating) {
+        return;
+    }
+
+    d->editPlane(ClipPlaneState::SlotY, [val](ClipPlaneState& plane) {
+        plane.offset = val;
+    });
 }
 
 void Clipping::onClipZValueChanged(double val)
 {
-    SbPlane pln = d->clipZ->plane.getValue();
-    d->clipZ->plane.setValue(SbPlane(pln.getNormal(), d->flipZ ? -val : val));
+    if (d->updating) {
+        return;
+    }
+
+    d->editPlane(ClipPlaneState::SlotZ, [val](ClipPlaneState& plane) {
+        plane.offset = val;
+    });
 }
 
 void Clipping::onFlipClipXClicked()
 {
-    d->flipX = !d->flipX;
-    SbPlane pln = d->clipX->plane.getValue();
-    d->clipX->plane.setValue(SbPlane(-pln.getNormal(), -pln.getDistanceFromOrigin()));
+    if (d->updating) {
+        return;
+    }
+
+    d->editPlane(ClipPlaneState::SlotX, [](ClipPlaneState& plane) {
+        plane.flipped = !plane.flipped;
+    });
 }
 
 void Clipping::onFlipClipYClicked()
 {
-    d->flipY = !d->flipY;
-    SbPlane pln = d->clipY->plane.getValue();
-    d->clipY->plane.setValue(SbPlane(-pln.getNormal(), -pln.getDistanceFromOrigin()));
+    if (d->updating) {
+        return;
+    }
+
+    d->editPlane(ClipPlaneState::SlotY, [](ClipPlaneState& plane) {
+        plane.flipped = !plane.flipped;
+    });
 }
 
 void Clipping::onFlipClipZClicked()
 {
-    d->flipZ = !d->flipZ;
-    SbPlane pln = d->clipZ->plane.getValue();
-    d->clipZ->plane.setValue(SbPlane(-pln.getNormal(), -pln.getDistanceFromOrigin()));
+    if (d->updating) {
+        return;
+    }
+
+    d->editPlane(ClipPlaneState::SlotZ, [](ClipPlaneState& plane) {
+        plane.flipped = !plane.flipped;
+    });
 }
 
 void Clipping::onGroupBoxViewToggled(bool on)
 {
-    if (on) {
-        d->ui.groupBoxX->setChecked(false);
-        d->ui.groupBoxY->setChecked(false);
-        d->ui.groupBoxZ->setChecked(false);
+    if (d->updating) {
+        return;
     }
 
-    d->clipView->on.setValue(on);
+    if (on) {
+        for (int slot : {ClipPlaneState::SlotX, ClipPlaneState::SlotY, ClipPlaneState::SlotZ}) {
+            d->disablePlane(slot);
+        }
+    }
+
+    d->editPlane(ClipPlaneState::SlotCustom, [on](ClipPlaneState& plane) {
+        plane.enabled = on;
+    });
 }
 
 void Clipping::onClipViewValueChanged(double val)
 {
-    SbPlane pln = d->clipView->plane.getValue();
-    d->clipView->plane.setValue(SbPlane(pln.getNormal(), val));
+    if (d->updating) {
+        return;
+    }
+
+    d->editPlane(ClipPlaneState::SlotCustom, [val](ClipPlaneState& plane) {
+        plane.offset = val;
+    });
 }
 
 void Clipping::onFromViewClicked()
 {
-    if (d->view) {
-        Gui::View3DInventorViewer* view = d->view->getViewer();
-        SbVec3f dir = view->getViewDirection();
-        SbPlane pln = d->clipView->plane.getValue();
-        d->clipView->plane.setValue(SbPlane(dir, pln.getDistanceFromOrigin()));
+    if (d->updating || !d->view) {
+        return;
     }
+
+    // Snap the custom normal to where the camera is looking right now, once.
+    // Unlike "Adjust to view direction" this is a one-off, so it writes the
+    // direction into the state and the direction widgets follow.
+    const SbVec3f dir = d->view->getViewer()->getViewDirection();
+    d->editPlane(ClipPlaneState::SlotCustom, [&dir](ClipPlaneState& plane) {
+        plane.normal[0] = dir[0];
+        plane.normal[1] = dir[1];
+        plane.normal[2] = dir[2];
+    });
 }
 
 void Clipping::onAdjustViewdirectionToggled(bool on)
 {
-    d->ui.dirX->setDisabled(on);
-    d->ui.dirY->setDisabled(on);
-    d->ui.dirZ->setDisabled(on);
-    d->ui.fromView->setDisabled(on);
+    if (d->updating) {
+        return;
+    }
 
-    if (on) {
-        d->sensor->schedule();
-    }
-    else {
-        d->sensor->unschedule();
-    }
+    // Also done in syncFromState(), which is what keeps the two boxes right
+    // when the state changes from anywhere else.
+    d->setViewDirWidgetsEnabled(on);
+
+    d->editPlane(ClipPlaneState::SlotCustom, [on](ClipPlaneState& plane) {
+        plane.followViewDir = on;
+    });
 }
 
 void Clipping::onDirXValueChanged(double)
 {
-    double x = d->ui.dirX->value();
-    double y = d->ui.dirY->value();
-    double z = d->ui.dirZ->value();
-
-    SbPlane pln = d->clipView->plane.getValue();
-    SbVec3f normal(x, y, z);
-    if (normal.sqrLength() > 0.0f) {
-        d->clipView->plane.setValue(SbPlane(normal, pln.getDistanceFromOrigin()));
+    if (d->updating) {
+        return;
     }
+
+    d->applyViewDirection();
 }
 
 void Clipping::onDirYValueChanged(double)
 {
-    double x = d->ui.dirX->value();
-    double y = d->ui.dirY->value();
-    double z = d->ui.dirZ->value();
-
-    SbPlane pln = d->clipView->plane.getValue();
-    SbVec3f normal(x, y, z);
-    if (normal.sqrLength() > 0.0f) {
-        d->clipView->plane.setValue(SbPlane(normal, pln.getDistanceFromOrigin()));
+    if (d->updating) {
+        return;
     }
+
+    d->applyViewDirection();
 }
 
 void Clipping::onDirZValueChanged(double)
 {
-    double x = d->ui.dirX->value();
-    double y = d->ui.dirY->value();
-    double z = d->ui.dirZ->value();
+    if (d->updating) {
+        return;
+    }
 
-    SbPlane pln = d->clipView->plane.getValue();
-    SbVec3f normal(x, y, z);
-    if (normal.sqrLength() > 0.0f) {
-        d->clipView->plane.setValue(SbPlane(normal, pln.getDistanceFromOrigin()));
+    d->applyViewDirection();
+}
+
+void Clipping::onClearAllClicked()
+{
+    if (ViewClipping* clipping = d->clipping()) {
+        clipping->clear();
     }
 }
 

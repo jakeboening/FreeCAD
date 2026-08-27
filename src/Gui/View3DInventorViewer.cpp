@@ -123,6 +123,7 @@
 #include <Gui/BitmapFactory.h>
 
 #include "View3DInventorViewer.h"
+#include "ViewClipping.h"
 #include "Application.h"
 #include "Camera.h"
 #include "Command.h"
@@ -1376,6 +1377,9 @@ View3DInventorViewer::~View3DInventorViewer()
     // the root node but isn't destroyed when closing this viewer so
     // that it prevents all children from being deleted. To reduce this
     // likelihood we explicitly remove all child nodes now.
+    // Before the graph goes: it holds nodes inside clipGroup.
+    clippingState.reset();
+
     coinRemoveAllChildren(this->pcViewProviderRoot);
     this->pcViewProviderRoot->unref();
     this->pcViewProviderRoot = nullptr;
@@ -1662,6 +1666,19 @@ SoNode* View3DInventorViewer::getEditingRoot() const
 SoGroup* View3DInventorViewer::getClipPlaneGroup() const
 {
     return this->clipGroup;
+}
+
+ViewClipping& View3DInventorViewer::clipping()
+{
+    if (!clippingState) {
+        clippingState = std::make_unique<ViewClipping>(*this);
+    }
+    return *clippingState;
+}
+
+bool View3DInventorViewer::hasClipping() const
+{
+    return clippingState != nullptr;
 }
 
 SoGroup* View3DInventorViewer::getObjectGroup() const

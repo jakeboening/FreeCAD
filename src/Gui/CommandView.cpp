@@ -665,6 +665,7 @@ private:
 
     void garbageCollect();
     bool hasClipping(App::Document* doc) const;
+    void closeClipping(App::Document* doc);
 
 private:
     std::vector<std::pair<App::Document*, QPointer<Gui::Dialog::Clipping>>> clippings;
@@ -696,11 +697,18 @@ void StdCmdToggleClipPlane::activated(int iMsg)
         return;
     }
     garbageCollect();  // remove dead pointers
-    if (!hasClipping(doc)) {
-        auto view = qobject_cast<View3DInventor*>(getMainWindow()->activeWindow());
-        if (view) {
-            clippings.push_back(std::make_pair(doc, Gui::Dialog::Clipping::makeDockWidget(view, doc)));
-        }
+    if (hasClipping(doc)) {
+        // Second invocation: put the panel away again - that is what makes this
+        // command a toggle. The clipping itself belongs to the viewer now and
+        // outlives the panel, so this only closes the editor; the panel's
+        // "Clear all" button is what actually removes the planes.
+        closeClipping(doc);
+        return;
+    }
+
+    auto view = qobject_cast<View3DInventor*>(getMainWindow()->activeWindow());
+    if (view) {
+        clippings.push_back(std::make_pair(doc, Gui::Dialog::Clipping::makeDockWidget(view, doc)));
     }
 }
 
@@ -733,6 +741,30 @@ bool StdCmdToggleClipPlane::hasClipping(App::Document* doc) const
                &std::pair<App::Document*, QPointer<Gui::Dialog::Clipping>>::first
            )
         != clippings.end();
+}
+
+void StdCmdToggleClipPlane::closeClipping(App::Document* doc)
+{
+    auto it = std::ranges::find(
+        clippings,
+        doc,
+        &std::pair<App::Document*, QPointer<Gui::Dialog::Clipping>>::first
+    );
+    if (it == clippings.end()) {
+        return;
+    }
+
+    if (it->second) {
+        // reject() is the panel's own close path, the one the Close button
+        // uses: it tears down the QDockWidget the panel is embedded in, which
+        // in turn owns and deletes the panel.
+        it->second->reject();
+    }
+
+    // That deletion is deferred to the event loop, so the QPointer stays
+    // non-null for now. Drop the entry here, or the next invocation would find
+    // a panel that is already on its way out and decline to open a new one.
+    clippings.erase(it);
 }
 
 //===========================================================================

@@ -897,6 +897,7 @@ SOURCE_GROUP("Widget\\QSintActionPanel\\Mocs" FILES ${qsint_MOC_SRCS})
 # The 3d view
 SET(View3D_CPP_SRCS
     Camera.cpp
+    ClippingState.cpp
     Flag.cpp
     GLBuffer.cpp
     GLPainter.cpp
@@ -909,6 +910,7 @@ SET(View3D_CPP_SRCS
     View3DInventorSelection.cpp
     View3DInventorViewer.cpp
     View3DInventorRiftViewer.cpp
+    ViewClipping.cpp
     View3DSettings.cpp
     CoinRiftWidget.cpp
     View3DPy.cpp
@@ -918,6 +920,7 @@ SET(View3D_CPP_SRCS
 SET(View3D_SRCS
     ${View3D_CPP_SRCS}
     Camera.h
+    ClippingState.h
     Flag.h
     GLBuffer.h
     RubberbandOverlay.h
@@ -929,6 +932,7 @@ SET(View3D_SRCS
     View3DInventor.h
     View3DInventorSelection.h
     View3DInventorViewer.h
+    ViewClipping.h
     View3DPy.h
     View3DInventorRiftViewer.h
     View3DSettings.h
