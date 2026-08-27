@@ -66,6 +66,10 @@ namespace Gui
  *                                   empty part of the 3D view, default true
  *     LeftClickWorkbenches (string) comma separated workbench names it applies
  *                                   in, default "PartDesignWorkbench", "*" = all
+ *     QuickMenuFadeNear    (int)    pixels from the click the quick menu stays
+ *                                   solid within, default 42
+ *     QuickMenuFadeFar     (int)    pixels from the click it has faded away by
+ *                                   and closes, default 154, 0 = never fade
  * @endcode
  * "Separator" may appear in a command list to insert a gap.  Commands that are
  * not registered, or that carry no icon, are skipped silently - an icon strip

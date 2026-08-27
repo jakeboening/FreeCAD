@@ -24,6 +24,7 @@
 #include <QAction>
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QMouseEvent>
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QMenu>
@@ -33,6 +34,7 @@
 #include <QWidgetAction>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -411,6 +413,66 @@ private:
     QPoint at;
 };
 
+
+/**
+ * Fades the quick menu out as the pointer wanders off from the click.
+ *
+ * A menu raised by a plain left click is easy to raise by accident, so it gives
+ * way to a pointer that is evidently going somewhere else, and lets go entirely
+ * once it is far enough gone.  Wandering onto the menu itself is not wandering
+ * off: while the pointer is over it, it stays whole.
+ *
+ * The menu holds the mouse grab, so it sees the pointer wherever it goes.
+ */
+class QuickMenuFade: public QObject
+{
+public:
+    QuickMenuFade(QMenu* menu, const QPoint& at, int solidRadius, int goneRadius)
+        : QObject(menu)
+        , menu(menu)
+        , origin(at)
+        , solidRadius(solidRadius)
+        , goneRadius(std::max(goneRadius, solidRadius + 1))
+    {
+        menu->installEventFilter(this);
+    }
+
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == menu && event->type() == QEvent::MouseMove) {
+            apply(static_cast<QMouseEvent*>(event)->globalPosition().toPoint());
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void apply(const QPoint& pos)
+    {
+        if (menu->geometry().contains(pos)) {
+            menu->setWindowOpacity(1.0);
+            return;
+        }
+
+        const double distance = std::hypot(pos.x() - origin.x(), pos.y() - origin.y());
+        if (distance <= solidRadius) {
+            menu->setWindowOpacity(1.0);
+            return;
+        }
+        if (distance >= goneRadius) {
+            menu->close();
+            return;
+        }
+
+        const double gone = (distance - solidRadius) / (goneRadius - solidRadius);
+        menu->setWindowOpacity(1.0 - gone);
+    }
+
+    QMenu* menu;
+    QPoint origin;
+    int solidRadius;
+    int goneRadius;
+};
+
 }  // namespace
 
 
@@ -564,6 +626,12 @@ void ContextMenuToolBar::popupQuickMenu(QWidget* parent, const QPoint& at)
         // Switched off, or not one command in the list could be shown.
         delete menu;
         return;
+    }
+
+    const int solidRadius = static_cast<int>(contextMenuParams()->GetInt("QuickMenuFadeNear", 42));
+    const int goneRadius = static_cast<int>(contextMenuParams()->GetInt("QuickMenuFadeFar", 154));
+    if (goneRadius > 0) {
+        new QuickMenuFade(menu, at, solidRadius, goneRadius);
     }
 
     menu->popup(pos);
