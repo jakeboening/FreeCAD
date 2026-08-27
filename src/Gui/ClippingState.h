@@ -25,6 +25,8 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include <FCGlobal.h>
 
@@ -116,5 +118,36 @@ struct GuiExport ClippingState
 
     bool operator==(const ClippingState&) const = default;
 };
+
+/**
+ * A clipping configuration the user has named, so that it can be recalled.
+ *
+ * The equivalent of a named section view in other CAD systems, and the soft
+ * counterpart of what Part_SectionCut gives you: those are real objects in the
+ * document, and so are these, in the sense that they are stored with the model
+ * rather than in the user's preferences. A view records offsets and directions
+ * that only mean anything against one particular model, so that is where it
+ * belongs - and it then travels with the file.
+ */
+struct GuiExport NamedClippingView
+{
+    std::string name;
+    ClippingState state;
+
+    bool operator==(const NamedClippingView&) const = default;
+};
+
+/// A document's named views, in the order they should be listed.
+using NamedClippingViews = std::vector<NamedClippingView>;
+
+/**
+ * Writes `<ClippingViews Count="n">`, each view wrapping one `<Clipping>`
+ * element, so a view is stored in exactly the same form as the active clipping.
+ * Writes nothing at all when there are none.
+ */
+GuiExport void saveNamedClippingViews(const NamedClippingViews& views, Base::Writer& writer);
+
+/// The reader must already be positioned on the `<ClippingViews>` element.
+GuiExport void restoreNamedClippingViews(NamedClippingViews& views, Base::XMLReader& reader);
 
 }  // namespace Gui

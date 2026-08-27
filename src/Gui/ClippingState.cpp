@@ -23,6 +23,7 @@
 
 #include "ClippingState.h"
 
+#include <Base/Persistence.h>
 #include <Base/Reader.h>
 #include <Base/StringUtils.h>
 #include <Base/Writer.h>
@@ -32,10 +33,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <ostream>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 using namespace Gui;
 
@@ -212,4 +216,106 @@ void ClippingState::restore(Base::XMLReader& reader)
     }
 
     reader.readEndElement("Clipping");
+}
+
+void Gui::saveNamedClippingViews(const NamedClippingViews& views, Base::Writer& writer)
+{
+    // Nothing at all rather than an empty <ClippingViews/>: a document that has
+    // never had a named view must still save byte for byte the way it did before
+    // this element existed, so the feature costs an untouched file no diff and an
+    // older FreeCAD nothing to trip over.
+    if (views.empty()) {
+        return;
+    }
+
+    writer.Stream() << writer.ind() << "<ClippingViews Count=\"" << views.size() << "\">"
+                    << std::endl;
+
+    writer.incInd();
+    for (const NamedClippingView& view : views) {
+        // The name is text the user typed, so it can hold any of the characters
+        // XML reserves; Base::Persistence::encodeAttribute() is what the rest of
+        // the document already uses to escape an attribute value.
+        writer.Stream() << writer.ind() << "<View name=\""
+                        << Base::Persistence::encodeAttribute(view.name) << "\">" << std::endl;
+
+        // Each view wraps exactly one <Clipping> written by ClippingState::save(),
+        // so a stored view and the active clipping share a single serialisation:
+        // whatever is added to a plane later is written and read in both places
+        // without this function having to learn about it.
+        writer.incInd();
+        view.state.save(writer);
+        writer.decInd();
+
+        writer.Stream() << writer.ind() << "</View>" << std::endl;
+    }
+    writer.decInd();
+
+    writer.Stream() << writer.ind() << "</ClippingViews>" << std::endl;
+}
+
+void Gui::restoreNamedClippingViews(NamedClippingViews& views, Base::XMLReader& reader)
+{
+    // As in ClippingState::restore(): what the file does not hold must not be
+    // left over from whatever this vector was carrying.
+    views.clear();
+
+    // A corrupt Count must not become a loop that reads past </Document>.
+    // readElement() throws once it runs off the end, which would cost the user
+    // the whole GuiDocument.xml rather than just its named views, so the count is
+    // capped well above any list a person would build and well below anything
+    // that could keep the parser busy.
+    constexpr unsigned long long maxViews = 1000;
+    const auto count = static_cast<std::size_t>(
+        std::min<unsigned long long>(readUnsigned(reader, "Count", 0), maxViews)
+    );
+
+    // The level of <ClippingViews> itself, used below to tell a <View> that has
+    // been entered from one that was already over when it was found.
+    const int viewsLevel = reader.level();
+
+    views.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        reader.readElement("View");
+
+        // getAttribute<const char*>() throws when the attribute is absent, so a
+        // <View> that lost its name is asked about rather than caught.
+        std::string name;
+        if (reader.hasAttribute("name")) {
+            name = reader.getAttribute<const char*>("name");
+        }
+
+        // An empty <View/> is already over by the time readElement() returns -
+        // XMLReader has put the level back - so there is nothing inside it to
+        // read and no end element left to read either. Everything below is
+        // therefore conditional on having actually entered the element.
+        const bool entered = reader.level() > viewsLevel;
+
+        // The view's <Clipping> is reached with readNextElement() rather than
+        // readElement(): readElement() scans forward, so a damaged <View> that
+        // has lost its clipping would run on and swallow the next view's element
+        // on its way to finding one. Stepping a single element instead keeps a
+        // corrupt view's cost to that view alone, which is the same bargain the
+        // rest of this file strikes. ClippingState::restore() consumes its own
+        // </Clipping>; the readEndElement("View") below resynchronises when there
+        // was nothing to restore.
+        ClippingState state;
+        if (entered && reader.readNextElement() && strcmp(reader.localName(), "Clipping") == 0) {
+            state.restore(reader);
+        }
+
+        // A nameless view could not be told from its neighbours in the panel and
+        // could not be recalled, so it is dropped rather than stored under an
+        // invented name. Its element is still read in full, which is what keeps
+        // the reader in step with the rest of the file.
+        if (!name.empty()) {
+            views.push_back(NamedClippingView {std::move(name), state});
+        }
+
+        if (entered) {
+            reader.readEndElement("View");
+        }
+    }
+
+    reader.readEndElement("ClippingViews");
 }

@@ -2056,7 +2056,18 @@ void Document::RestoreDocFile(Base::Reader& reader)
         // here. That is the whole backward-compatibility mechanism; readElement()
         // must not be used instead, as it scans forward and would throw once it
         // ran off the end of a document that has no <Clipping> at all.
-        if (localreader->readNextElement() && strcmp(localreader->localName(), "Clipping") == 0) {
+        //
+        // Anything the file does not hold must not be left over from a previous
+        // restore of this same document, exactly as for cameraSettings above.
+        clippingViews.clear();
+        //
+        // <Clipping> and <ClippingViews> are independent: a document may hold
+        // neither, either one alone, or both, so each is only looked at if it is
+        // what the reader actually landed on, and the element that follows is
+        // asked for with readNextElement() again.
+        bool haveElement = localreader->readNextElement();
+
+        if (haveElement && strcmp(localreader->localName(), "Clipping") == 0) {
             try {
                 clippingSettings.restore(*localreader);
                 hasClippingSettings = !clippingSettings.isDefault();
@@ -2067,10 +2078,33 @@ void Document::RestoreDocFile(Base::Reader& reader)
                         }
                     }
                 }
+
+                // <ClippingViews> is a sibling of <Clipping>, so it is whatever
+                // comes after </Clipping> - which restore() has just consumed -
+                // and is absent on a document that has no named views.
+                haveElement = localreader->readNextElement();
             }
             catch (const Base::Exception& e) {
                 // A damaged <Clipping> costs the user their clipping planes, not
                 // the rest of the document, so report and carry on - as above.
+                Base::Console().error("%s\n", e.what());
+
+                // The reader stopped somewhere unknown inside the damaged
+                // element, so nothing that follows can be trusted to be a sibling.
+                haveElement = false;
+            }
+        }
+
+        if (haveElement && strcmp(localreader->localName(), "ClippingViews") == 0) {
+            try {
+                restoreNamedClippingViews(clippingViews, *localreader);
+            }
+            catch (const Base::Exception& e) {
+                // Same bargain as above: a damaged element costs the user their
+                // named views, not the rest of the document. What the vector
+                // already holds is kept rather than cleared - a view is only
+                // appended once it has been read in full, so a truncated or
+                // over-counted list still gives back every view that was intact.
                 Base::Console().error("%s\n", e.what());
             }
         }
@@ -2231,6 +2265,17 @@ void Document::SaveDocFile(Base::Writer& writer) const
         clippingSettings.save(writer);
         writer.decInd();  // indentation for clipping settings
     }
+
+    // <ClippingViews> is a sibling of <Clipping> rather than a child of it,
+    // because the two are independent: named views are a list the user curates
+    // and outlive whatever happens to be clipped right now, so a document can
+    // easily have views with no active clipping, or clipping with no views. It is
+    // written unconditionally for that reason - saveNamedClippingViews() itself
+    // writes nothing when the list is empty, so an untouched document still saves
+    // byte-identical.
+    writer.incInd();  // indentation for named clipping views
+    saveNamedClippingViews(clippingViews, writer);
+    writer.decInd();  // indentation for named clipping views
 
     writer.Stream() << "</Document>" << std::endl;
 }
@@ -2524,6 +2569,33 @@ void Document::saveClippingSettings(const ClippingState& settings) const
 {
     clippingSettings = settings;
     hasClippingSettings = !settings.isDefault();
+}
+
+/**
+ * The named clipping views stored with this document, in the order the panel
+ * lists them.
+ */
+const NamedClippingViews& Document::getClippingViews() const
+{
+    return clippingViews;
+}
+
+/**
+ * Replaces the document's named clipping views and marks it modified.
+ *
+ * Unlike the active clipping, which is picked up from the view at save time the
+ * way the camera is, adding, renaming or deleting a named view is a deliberate
+ * edit: it would be lost without a save, so the user has to be told there is
+ * something to save.
+ */
+void Document::setClippingViews(const NamedClippingViews& views)
+{
+    if (clippingViews == views) {
+        return;
+    }
+
+    clippingViews = views;
+    setModified(true);
 }
 
 void Document::attachView(Gui::BaseView* pcView, bool bPassiv)

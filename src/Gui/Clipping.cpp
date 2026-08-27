@@ -20,6 +20,7 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
 #include <limits>
 #include <functional>
 
@@ -30,7 +31,10 @@
 #include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QSpinBox>
@@ -42,6 +46,7 @@
 #include "ui_Clipping.h"
 #include "ClippingState.h"
 #include "DockWindowManager.h"
+#include "Document.h"
 #include "View3DInventor.h"
 #include "View3DInventorViewer.h"
 #include "ViewClipping.h"
@@ -115,6 +120,72 @@ public:
     Gui::ViewClipping* clipping() const
     {
         return view ? &view->getViewer()->clipping() : nullptr;
+    }
+
+    /// The document the saved views live in, or nullptr once the view has gone.
+    Gui::Document* guiDocument() const
+    {
+        return view ? view->getGuiDocument() : nullptr;
+    }
+
+    /**
+     * The saved view a combo row stands for, or nullptr for the placeholder.
+     *
+     * Row 0 is the "(none)" placeholder, so the document's list is offset by
+     * one. Nothing else in this file may assume that: go through here.
+     */
+    const Gui::NamedClippingView* viewAt(int row) const
+    {
+        Gui::Document* doc = guiDocument();
+        if (!doc || row < 1) {
+            return nullptr;
+        }
+
+        const Gui::NamedClippingViews& views = doc->getClippingViews();
+        const auto index = static_cast<std::size_t>(row - 1);
+        return index < views.size() ? &views[index] : nullptr;
+    }
+
+    /**
+     * Refills the combo from the document and selects @a selectName.
+     *
+     * Held under `updating` for the same reason syncFromState() is: clearing
+     * and refilling a combo box emits currentIndexChanged for every row that
+     * passes through the current slot, and each of those echoes would reach
+     * onSavedViewsChanged() and apply a view the user never picked - including,
+     * on the last one, a view other than the one just saved.
+     */
+    void populateSavedViews(const QString& selectName)
+    {
+        const bool wasUpdating = updating;
+        updating = true;
+
+        ui.savedViews->clear();
+        ui.savedViews->addItem(Clipping::tr("(none)"));
+
+        Gui::Document* doc = guiDocument();
+        int selected = 0;
+        if (doc) {
+            int row = 1;
+            for (const Gui::NamedClippingView& saved : doc->getClippingViews()) {
+                const QString name = QString::fromStdString(saved.name);
+                ui.savedViews->addItem(name);
+                if (name == selectName) {
+                    selected = row;
+                }
+                ++row;
+            }
+        }
+        ui.savedViews->setCurrentIndex(selected);
+
+        updating = wasUpdating;
+
+        // Both buttons need somewhere to read from and write to. Deleting also
+        // needs something actually selected, which the placeholder is not.
+        const bool editable = doc && clipping();
+        ui.savedViews->setEnabled(editable);
+        ui.saveView->setEnabled(editable);
+        ui.deleteView->setEnabled(editable && selected > 0);
     }
 
     /// Reads one plane out of the state, hands it to @a mutate, and writes it back.
@@ -413,6 +484,12 @@ Clipping::Clipping(Gui::View3DInventor* view, App::Document* showOn, QWidget* pa
         d->ui.clipZ->setDecimals(minDecimals);
     }
 
+    // Nothing is selected to begin with: what the view is clipped by may well
+    // match a saved view, but it may equally have been edited since, and the
+    // panel has no way to tell the two apart that is worth misleading the user
+    // over.
+    d->populateSavedViews(QString());
+
     // Show whatever the view is already clipped by. This also supplies the
     // custom plane's default +Z direction, which the viewer seeds.
     syncFromState();
@@ -453,6 +530,12 @@ void Clipping::setupConnections()
     // clang-format off
     d->activeDocConnection = App::GetApplication().signalActiveDocument.connect(
             std::bind(&Clipping::onActiveDocument, this, std::placeholders::_1));
+    connect(d->ui.savedViews, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &Clipping::onSavedViewsChanged);
+    connect(d->ui.saveView, &QPushButton::clicked,
+            this, &Clipping::onSaveViewClicked);
+    connect(d->ui.deleteView, &QPushButton::clicked,
+            this, &Clipping::onDeleteViewClicked);
     connect(d->ui.groupBoxX, &QGroupBox::toggled,
             this, &Clipping::onGroupBoxXToggled);
     connect(d->ui.groupBoxY, &QGroupBox::toggled,
@@ -594,6 +677,138 @@ void Clipping::onActiveDocument(const App::Document& doc)
     else {
         d->dockWidget->hide();
     }
+}
+
+/**
+ * Applies the picked view, whole.
+ *
+ * setState() emits signalChanged, and syncFromState() is connected to it, so
+ * every plane, cap and direction widget is refreshed from there; there is
+ * deliberately nothing to repeat here.
+ */
+void Clipping::onSavedViewsChanged(int index)
+{
+    if (d->updating) {
+        return;
+    }
+
+    const NamedClippingView* saved = d->viewAt(index);
+
+    // The placeholder is a way back to "none of these", not a view of its own:
+    // picking it leaves the clipping alone and only greys out Delete.
+    d->ui.deleteView->setEnabled(saved != nullptr);
+
+    if (!saved) {
+        return;
+    }
+
+    if (ViewClipping* clipping = d->clipping()) {
+        clipping->setState(saved->state);
+    }
+}
+
+/**
+ * Stores the current clipping in the document under a name.
+ *
+ * The document owns the list, so this reads it, edits the copy, and hands the
+ * whole thing back - setClippingViews() is what marks the document modified.
+ */
+void Clipping::onSaveViewClicked()
+{
+    Gui::Document* doc = d->guiDocument();
+    ViewClipping* clipping = d->clipping();
+    if (!doc || !clipping) {
+        return;
+    }
+
+    // Pre-filled with the selection, so that adjusting a view and saving it
+    // back over itself is two confirmations rather than retyping its name.
+    const NamedClippingView* selected = d->viewAt(d->ui.savedViews->currentIndex());
+    const QString suggestion = selected ? QString::fromStdString(selected->name) : QString();
+
+    bool accepted = false;
+    const QString entered = QInputDialog::getText(this,
+                                                  tr("Save view"),
+                                                  tr("Name:"),
+                                                  QLineEdit::Normal,
+                                                  suggestion,
+                                                  &accepted);
+    if (!accepted) {
+        return;
+    }
+
+    // Trimmed before it is judged, so that a name of nothing but spaces cannot
+    // become a row the user has no way of telling from any other.
+    const QString name = entered.trimmed();
+    if (name.isEmpty()) {
+        QMessageBox::warning(this, tr("Save view"), tr("Please enter a name for the view."));
+        return;
+    }
+
+    NamedClippingViews views = doc->getClippingViews();
+    const auto existing =
+        std::find_if(views.begin(), views.end(), [&name](const NamedClippingView& saved) {
+            return QString::fromStdString(saved.name) == name;
+        });
+
+    if (existing != views.end()) {
+        const auto answer =
+            QMessageBox::question(this,
+                                  tr("Save view"),
+                                  tr("A saved view named '%1' already exists.\n\n"
+                                     "Do you want to overwrite it?")
+                                      .arg(name),
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+
+        // Overwritten in place: the list is the user's own order, and a save
+        // that shuffled a view to the end would quietly rearrange it.
+        existing->state = clipping->state();
+    }
+    else {
+        views.push_back({name.toStdString(), clipping->state()});
+    }
+
+    doc->setClippingViews(views);
+    d->populateSavedViews(name);
+}
+
+/**
+ * Forgets a saved view.
+ *
+ * Only the name goes: the clipping the user is looking at is left exactly as
+ * it is, since deleting a bookmark is not the same as asking for the view to
+ * be reset.
+ */
+void Clipping::onDeleteViewClicked()
+{
+    Gui::Document* doc = d->guiDocument();
+    const int index = d->ui.savedViews->currentIndex();
+    const NamedClippingView* selected = d->viewAt(index);
+    if (!doc || !selected) {
+        return;
+    }
+
+    const QString name = QString::fromStdString(selected->name);
+    const auto answer = QMessageBox::question(this,
+                                              tr("Delete view"),
+                                              tr("Delete the saved view '%1'?").arg(name),
+                                              QMessageBox::Yes | QMessageBox::No,
+                                              QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    NamedClippingViews views = doc->getClippingViews();
+    views.erase(views.begin() + (index - 1));
+    doc->setClippingViews(views);
+
+    // Nothing is left selected: the placeholder is what "the clipping on
+    // screen is not one of the saved views" looks like.
+    d->populateSavedViews(QString());
 }
 
 /**

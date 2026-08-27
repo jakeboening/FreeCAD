@@ -47,6 +47,10 @@ namespace Dialog
  * widgets when ViewClipping::signalChanged fires.  Reopening the panel
  * therefore shows the clipping that is already active instead of resetting it.
  *
+ * The one thing the panel edits beyond that state is the document's list of
+ * saved views (Gui::NamedClippingView), which the row at the top of the panel
+ * recalls, adds to and deletes from.
+ *
  * @author Werner Mayer
  */
 class GuiExport Clipping: public QDialog
@@ -61,6 +65,9 @@ public:
 protected:
     void setupConnections();
     void onActiveDocument(const App::Document& doc);
+    void onSavedViewsChanged(int);
+    void onSaveViewClicked();
+    void onDeleteViewClicked();
     void onGroupBoxXToggled(bool);
     void onGroupBoxYToggled(bool);
     void onGroupBoxZToggled(bool);
