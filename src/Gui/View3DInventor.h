@@ -44,6 +44,7 @@ class View3DInventorViewer;
 class View3DPy;
 class View3DSettings;
 class NaviCubeSettings;
+struct ClippingState;
 
 struct RayPickInfo
 {
@@ -123,6 +124,10 @@ public:
     RayPickInfo getObjInfoRay(Base::Vector3d* startvec, Base::Vector3d* dirvec);
     const std::string& getCamera() const override;
     bool setCamera(const char* pCamera) override;
+    /// The clipping of this view, so Gui::Document can persist it next to the camera.
+    const ClippingState& getClippingState() const;
+    /// Applies a whole clipping configuration at once, as a document restore does.
+    void setClippingState(const ClippingState& state);
     void toggleClippingPlane();
     bool hasClippingPlane() const;
 

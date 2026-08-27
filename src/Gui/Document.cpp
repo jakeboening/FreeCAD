@@ -2048,6 +2048,32 @@ void Document::RestoreDocFile(Base::Reader& reader)
                 Base::Console().error("%s\n", e.what());
             }
         }
+
+        // read clipping settings, which follow the camera and are only present
+        // when something was clipped. readNextElement() returns true only on a
+        // start element, so a file written before clipping was persisted - where
+        // the next token is </Document> - just leaves everything at its default
+        // here. That is the whole backward-compatibility mechanism; readElement()
+        // must not be used instead, as it scans forward and would throw once it
+        // ran off the end of a document that has no <Clipping> at all.
+        if (localreader->readNextElement() && strcmp(localreader->localName(), "Clipping") == 0) {
+            try {
+                clippingSettings.restore(*localreader);
+                hasClippingSettings = !clippingSettings.isDefault();
+                if (hasClippingSettings) {
+                    for (const auto& it : getMDIViews()) {
+                        if (auto* view3D = freecad_cast<View3DInventor*>(it)) {
+                            view3D->setClippingState(clippingSettings);
+                        }
+                    }
+                }
+            }
+            catch (const Base::Exception& e) {
+                // A damaged <Clipping> costs the user their clipping planes, not
+                // the rest of the document, so report and carry on - as above.
+                Base::Console().error("%s\n", e.what());
+            }
+        }
     }
 
     reader.initLocalReader(localreader);
@@ -2183,6 +2209,28 @@ void Document::SaveDocFile(Base::Writer& writer) const
     writer.Stream() << writer.ind() << "<Camera settings=\"" << encodeAttribute(getCameraSettings())
                     << "\"/>\n";
     writer.decInd();  // indentation for camera settings
+
+    // save clipping settings, first view wins, exactly as for the camera above.
+    // The break is unconditional rather than "first view that has any", so that
+    // switching the clipping off in that view persists as off instead of leaving
+    // the value that was restored with the document standing.
+    for (const auto& it : getMDIViews()) {
+        if (auto* view3D = freecad_cast<View3DInventor*>(it)) {
+            saveClippingSettings(view3D->getClippingState());
+            break;
+        }
+    }
+
+    // <Clipping> goes after <Camera>, and is omitted entirely when nothing is
+    // clipped. Both matter for compatibility: a FreeCAD that predates clipping
+    // stops reading once it has the camera, so anything further along is ignored
+    // rather than mis-parsed, and a document that never used clipping still
+    // saves byte-identical to before - no empty element, no spurious diff.
+    if (!clippingSettings.isDefault()) {
+        writer.incInd();  // indentation for clipping settings
+        clippingSettings.save(writer);
+        writer.decInd();  // indentation for clipping settings
+    }
 
     writer.Stream() << "</Document>" << std::endl;
 }
@@ -2364,6 +2412,7 @@ MDIView* Document::createView(const Base::Type& typeId, CreateViewMode mode)
 
             const std::string& camera = firstView->getCamera();
             saveCameraSettings(camera.c_str());
+            saveClippingSettings(firstView->getClippingState());
         }
 
         auto view3D = new View3DInventor(this, getMainWindow(), shareWidget);
@@ -2409,6 +2458,12 @@ MDIView* Document::createView(const Base::Type& typeId, CreateViewMode mode)
 
         if (!cameraSettings.empty()) {
             view3D->setCamera(cameraSettings.c_str());
+        }
+
+        // Guarded so that a document with no clipping does not get a ViewClipping
+        // - and the Coin nodes behind it - built for every view it opens.
+        if (hasClippingSettings) {
+            view3D->setClippingState(clippingSettings);
         }
 
         // When cloning the view, don't add the view to the main window. The whole purpose of the
@@ -2458,6 +2513,17 @@ bool Document::saveCameraSettings(const char* settings) const
 
     cameraSettings = settings;
     return true;
+}
+
+const ClippingState& Document::getClippingSettings() const
+{
+    return clippingSettings;
+}
+
+void Document::saveClippingSettings(const ClippingState& settings) const
+{
+    clippingSettings = settings;
+    hasClippingSettings = !settings.isDefault();
 }
 
 void Document::attachView(Gui::BaseView* pcView, bool bPassiv)

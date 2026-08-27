@@ -73,6 +73,7 @@
 #include "SoFCVectorizeSVGAction.h"
 #include "View3DInventorViewer.h"
 #include "View3DPy.h"
+#include "ViewClipping.h"
 #include "ViewParams.h"
 #include "ViewProvider.h"
 #include "ViewProviderDocumentObject.h"
@@ -159,6 +160,14 @@ View3DInventor::~View3DInventor()
         SoCamera* Cam = _viewer->getSoRenderManager()->getCamera();
         if (Cam) {
             _pcDocument->saveCameraSettings(SoFCDB::writeNodesToString(Cam).c_str());
+        }
+
+        // Same reason as the camera above: the document is what gets saved, and
+        // this may be the last view to hold the clipping. Only push when there
+        // really is clipping - hasClipping() does not bring one into being, so
+        // closing a view that never clipped leaves the document's setting alone.
+        if (_viewer->hasClipping()) {
+            _pcDocument->saveClippingSettings(_viewer->clipping().state());
         }
     }
 
@@ -584,6 +593,24 @@ const std::string& View3DInventor::getCamera() const
 bool View3DInventor::setCamera(const char* pCamera)
 {
     return _viewer->setCamera(pCamera);
+}
+
+const ClippingState& View3DInventor::getClippingState() const
+{
+    // clipping() creates the ViewClipping on first use, so forwarding to it
+    // straight away would give every document that has never clipped anything a
+    // set of Coin nodes merely because it was saved. Ask first, and hand back one
+    // shared default when there is nothing to report.
+    static const ClippingState defaultState {};
+    if (!_viewer->hasClipping()) {
+        return defaultState;
+    }
+    return _viewer->clipping().state();
+}
+
+void View3DInventor::setClippingState(const ClippingState& state)
+{
+    _viewer->clipping().setState(state);
 }
 
 void View3DInventor::toggleClippingPlane()
