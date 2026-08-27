@@ -39,6 +39,7 @@
 #include "MainWindow.h"
 #include "WorkbenchSelector.h"
 #include "ToolBarAreaWidget.h"
+#include "UiZoom.h"
 
 
 using namespace Gui;
@@ -46,7 +47,8 @@ using namespace Gui;
 WorkbenchComboBox::WorkbenchComboBox(WorkbenchGroup* aGroup, QWidget* parent)
     : QComboBox(parent)
 {
-    setIconSize(QSize(16, 16));
+    setProperty("fc_baseIconSize", 16);
+    setIconSize(QSize(UiZoom::instance().scaled(16), UiZoom::instance().scaled(16)));
     setToolTip(aGroup->toolTip());
     setStatusTip(aGroup->action()->statusTip());
     setWhatsThis(aGroup->action()->whatsThis());
@@ -142,7 +144,8 @@ WorkbenchTabWidget::WorkbenchTabWidget(WorkbenchGroup* aGroup, QWidget* parent)
     tabBar->setDocumentMode(true);
     tabBar->setUsesScrollButtons(true);
     tabBar->setDrawBase(true);
-    tabBar->setIconSize(QSize(16, 16));
+    tabBar->setProperty("fc_baseIconSize", 16);
+    tabBar->setIconSize(QSize(UiZoom::instance().scaled(16), UiZoom::instance().scaled(16)));
 
     updateWorkbenchList();
 

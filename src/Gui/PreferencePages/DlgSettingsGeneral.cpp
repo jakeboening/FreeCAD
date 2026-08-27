@@ -246,6 +246,7 @@ void DlgSettingsGeneral::saveSettings()
     saveUnitSystemSettings();
 
     ui->RecentFiles->onSave();
+    ui->UiZoom->onSave();
     ui->EnableCursorBlinking->onSave();
     ui->SplashScreen->onSave();
     ui->ActivateOverlay->onSave();
@@ -302,6 +303,7 @@ void DlgSettingsGeneral::loadSettings()
     ui->SubstituteDecimal->onRestore();
     ui->UseLocaleFormatting->onRestore();
     ui->RecentFiles->onRestore();
+    ui->UiZoom->onRestore();
     ui->EnableCursorBlinking->onRestore();
     ui->SplashScreen->onRestore();
     ui->ActivateOverlay->onRestore();

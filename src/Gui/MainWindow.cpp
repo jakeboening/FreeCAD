@@ -112,6 +112,7 @@
 #include "StatusBarLabel.h"
 #include "ToolBarManager.h"
 #include "ToolBoxManager.h"
+#include "UiZoom.h"
 #include "Utilities.h"
 #include "Tree.h"
 #include "WaitCursor.h"
@@ -536,7 +537,10 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags f)
     );
 
     auto* toggleBottomPanelsButton = new QToolButton(statusBar());
-    toggleBottomPanelsButton->setIconSize(QSize(16, 16));
+    toggleBottomPanelsButton->setProperty("fc_baseIconSize", 16);
+    toggleBottomPanelsButton->setIconSize(
+        QSize(UiZoom::instance().scaled(16), UiZoom::instance().scaled(16))
+    );
     toggleBottomPanelsButton->setIcon(BitmapFactory().pixmap("Std_ToggleBottomPanels"));
     toggleBottomPanelsButton->setCheckable(true);
     // Starts checked because FreeCAD shows bottom panels by default on first launch. On subsequent
@@ -734,7 +738,8 @@ bool MainWindow::setupTaskView()
         taskView->setRestoreWidth(restore);
         taskView->setObjectName(QStringLiteral("Tasks"));
         taskView->setWindowTitle(QDockWidget::tr("Tasks"));
-        taskView->setMinimumWidth(210);
+        taskView->setProperty("fc_baseMinimumWidth", 210);
+        taskView->setMinimumWidth(UiZoom::instance().scaled(210));
 
         DockWindowManager* pDockMgr = DockWindowManager::instance();
         pDockMgr->registerDockWindow("Std_TaskView", taskView);
@@ -751,7 +756,8 @@ bool MainWindow::setupSelectionView()
         auto pcSelectionView = new SelectionView(nullptr, this);
         pcSelectionView->setObjectName(QStringLiteral("Selection view"));
         pcSelectionView->setWindowTitle(QDockWidget::tr("Selection View"));
-        pcSelectionView->setMinimumWidth(210);
+        pcSelectionView->setProperty("fc_baseMinimumWidth", 210);
+        pcSelectionView->setMinimumWidth(UiZoom::instance().scaled(210));
 
         DockWindowManager* pDockMgr = DockWindowManager::instance();
         pDockMgr->registerDockWindow("Std_SelectionView", pcSelectionView);
@@ -816,7 +822,8 @@ bool MainWindow::updateTreeView(bool show)
             auto tree = new TreeDockWidget(0, getMainWindow());
             tree->setObjectName(QStringLiteral("Tree view"));
             tree->setWindowTitle(QDockWidget::tr("Tree View"));
-            tree->setMinimumWidth(210);
+            tree->setProperty("fc_baseMinimumWidth", 210);
+            tree->setMinimumWidth(UiZoom::instance().scaled(210));
             widget = tree;
             return widget;
         });
@@ -846,7 +853,8 @@ bool MainWindow::updatePropertyView(bool show)
             auto pcPropView = new PropertyDockView(0, getMainWindow());
             pcPropView->setObjectName(QStringLiteral("Property view"));
             pcPropView->setWindowTitle(QDockWidget::tr("Property View"));
-            pcPropView->setMinimumWidth(210);
+            pcPropView->setProperty("fc_baseMinimumWidth", 210);
+            pcPropView->setMinimumWidth(UiZoom::instance().scaled(210));
             widget = pcPropView;
             return widget;
         });
@@ -904,7 +912,8 @@ bool MainWindow::updateComboView(bool show)
             pcComboView = new ComboView(nullptr, getMainWindow());
             pcComboView->setObjectName(QStringLiteral("Model"));
             pcComboView->setWindowTitle(QDockWidget::tr("Model"));
-            pcComboView->setMinimumWidth(150);
+            pcComboView->setProperty("fc_baseMinimumWidth", 150);
+            pcComboView->setMinimumWidth(UiZoom::instance().scaled(150));
             widget = pcComboView;
             return widget;
         });

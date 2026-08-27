@@ -110,6 +110,7 @@
 #include "TransactionObject.h"
 #include "TextDocumentEditorView.h"
 #include "UiLoader.h"
+#include "UiZoom.h"
 #include "View3DPy.h"
 #include "View3DViewerPy.h"
 #include "View3DInventor.h"
@@ -429,6 +430,47 @@ void qtInvokeOnMain(std::function<void()>&& fn, bool blocking)
 
 }  // namespace Gui
 
+namespace
+{
+
+/**
+ * Exposes the current interface zoom to the stylesheet expression language as a
+ * dimensionless `@UiZoom`, so a theme can scale something explicitly with
+ * `@{12px * @UiZoom}`.
+ *
+ * The value is read live rather than cached, which is all it takes to stay
+ * current: ParameterManager::reload() drops the resolved-token cache, and
+ * UiZoom::apply() goes through Application::reloadStyleSheet(), which reloads.
+ */
+class UiZoomParameterSource: public Gui::StyleParameters::ParameterSource
+{
+public:
+    explicit UiZoomParameterSource(const Metadata& metadata)
+        : ParameterSource(metadata)
+    {
+        this->metadata.options |= ReadOnly;
+    }
+
+    std::list<Gui::StyleParameters::Parameter> all() const override
+    {
+        return {*get("UiZoom")};
+    }
+
+    std::optional<Gui::StyleParameters::Parameter> get(const std::string& name) const override
+    {
+        if (name != "UiZoom") {
+            return std::nullopt;
+        }
+
+        return Gui::StyleParameters::Parameter {
+            .name = "UiZoom",
+            .value = fmt::format("{}", Gui::UiZoom::instance().factor()),
+        };
+    }
+};
+
+}  // namespace
+
 void Application::initStyleParameterManager()
 {
     static ParamHandlers handlers;
@@ -475,6 +517,10 @@ void Application::initStyleParameterManager()
 
     Base::registerServiceImplementation<StyleParameters::ParameterSource>(
         new StyleParameters::BuiltInParameterSource({.name = QT_TR_NOOP("Built-in Parameters")})
+    );
+
+    Base::registerServiceImplementation<StyleParameters::ParameterSource>(
+        new UiZoomParameterSource({.name = QT_TR_NOOP("Interface Zoom")})
     );
 
     // todo: left for compatibility with older theme versions, to be removed before release
@@ -2891,7 +2937,12 @@ void Application::reloadStyleSheet()
 
 QString Application::replaceVariablesInQss(const QString& qssText)
 {
-    return QString::fromStdString(d->styleParameterManager->replacePlaceholders(qssText.toStdString()));
+    // Scaling runs on the raw text, before substitution: that way every caller
+    // gets it - defaults.qss, the theme sheet and the dock overlay sheet - and
+    // the result of a `@{...}` expression is never scaled a second time.
+    const QString scaled = UiZoom::instance().scaleStyleSheet(qssText);
+
+    return QString::fromStdString(d->styleParameterManager->replacePlaceholders(scaled.toStdString()));
 }
 
 void Application::setStyle(const QString& name)
