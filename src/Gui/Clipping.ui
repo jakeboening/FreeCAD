@@ -56,6 +56,63 @@
         </property>
        </widget>
       </item>
+      <item row="1" column="0" colspan="4">
+       <layout class="QHBoxLayout" name="capLayoutX">
+        <item>
+         <widget class="QCheckBox" name="capX">
+          <property name="toolTip">
+           <string>Fill the exposed cross-section</string>
+          </property>
+          <property name="text">
+           <string>Cap</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="capModeX">
+          <property name="toolTip">
+           <string>Where the color of the cut face comes from</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>Body color</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Custom color</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <widget class="Gui::ColorButton" name="capColorX">
+          <property name="minimumSize">
+           <size>
+            <width>50</width>
+            <height>20</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Color of the cut face</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="capTransparencyX">
+          <property name="toolTip">
+           <string>Transparency of the cut face</string>
+          </property>
+          <property name="suffix">
+           <string> %</string>
+          </property>
+          <property name="maximum">
+           <number>100</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
       </layout>
     </widget>
    </item>
@@ -101,6 +158,63 @@
         </property>
        </widget>
       </item>
+      <item row="1" column="0" colspan="4">
+       <layout class="QHBoxLayout" name="capLayoutY">
+        <item>
+         <widget class="QCheckBox" name="capY">
+          <property name="toolTip">
+           <string>Fill the exposed cross-section</string>
+          </property>
+          <property name="text">
+           <string>Cap</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="capModeY">
+          <property name="toolTip">
+           <string>Where the color of the cut face comes from</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>Body color</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Custom color</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <widget class="Gui::ColorButton" name="capColorY">
+          <property name="minimumSize">
+           <size>
+            <width>50</width>
+            <height>20</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Color of the cut face</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="capTransparencyY">
+          <property name="toolTip">
+           <string>Transparency of the cut face</string>
+          </property>
+          <property name="suffix">
+           <string> %</string>
+          </property>
+          <property name="maximum">
+           <number>100</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
       </layout>
     </widget>
    </item>
@@ -145,6 +259,63 @@
          <string>Flip</string>
         </property>
        </widget>
+      </item>
+      <item row="1" column="0" colspan="4">
+       <layout class="QHBoxLayout" name="capLayoutZ">
+        <item>
+         <widget class="QCheckBox" name="capZ">
+          <property name="toolTip">
+           <string>Fill the exposed cross-section</string>
+          </property>
+          <property name="text">
+           <string>Cap</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="capModeZ">
+          <property name="toolTip">
+           <string>Where the color of the cut face comes from</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>Body color</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Custom color</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <widget class="Gui::ColorButton" name="capColorZ">
+          <property name="minimumSize">
+           <size>
+            <width>50</width>
+            <height>20</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Color of the cut face</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="capTransparencyZ">
+          <property name="toolTip">
+           <string>Transparency of the cut face</string>
+          </property>
+          <property name="suffix">
+           <string> %</string>
+          </property>
+          <property name="maximum">
+           <number>100</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
       </layout>
     </widget>
@@ -216,10 +387,80 @@
         </layout>
        </widget>
       </item>
+      <item row="3" column="0" colspan="5">
+       <layout class="QHBoxLayout" name="capLayoutView">
+        <item>
+         <widget class="QCheckBox" name="capView">
+          <property name="toolTip">
+           <string>Fill the exposed cross-section</string>
+          </property>
+          <property name="text">
+           <string>Cap</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="capModeView">
+          <property name="toolTip">
+           <string>Where the color of the cut face comes from</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>Body color</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Custom color</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <widget class="Gui::ColorButton" name="capColorView">
+          <property name="minimumSize">
+           <size>
+            <width>50</width>
+            <height>20</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Color of the cut face</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="capTransparencyView">
+          <property name="toolTip">
+           <string>Transparency of the cut face</string>
+          </property>
+          <property name="suffix">
+           <string> %</string>
+          </property>
+          <property name="maximum">
+           <number>100</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
       </layout>
     </widget>
    </item>
    <item row="4" column="0">
+    <widget class="QLabel" name="stencilWarning">
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+     <property name="text">
+      <string>Capping is unavailable: this OpenGL context has no stencil buffer.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item row="5" column="0">
     <widget class="QDialogButtonBox" name="buttonBox">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>
@@ -231,16 +472,35 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Gui::ColorButton</class>
+   <extends>QPushButton</extends>
+   <header>Gui/Widgets.h</header>
+  </customwidget>
+ </customwidgets>
  <tabstops>
   <tabstop>groupBoxX</tabstop>
   <tabstop>clipX</tabstop>
   <tabstop>flipClipX</tabstop>
+  <tabstop>capX</tabstop>
+  <tabstop>capModeX</tabstop>
+  <tabstop>capColorX</tabstop>
+  <tabstop>capTransparencyX</tabstop>
   <tabstop>groupBoxY</tabstop>
   <tabstop>clipY</tabstop>
   <tabstop>flipClipY</tabstop>
+  <tabstop>capY</tabstop>
+  <tabstop>capModeY</tabstop>
+  <tabstop>capColorY</tabstop>
+  <tabstop>capTransparencyY</tabstop>
   <tabstop>groupBoxZ</tabstop>
   <tabstop>clipZ</tabstop>
   <tabstop>flipClipZ</tabstop>
+  <tabstop>capZ</tabstop>
+  <tabstop>capModeZ</tabstop>
+  <tabstop>capColorZ</tabstop>
+  <tabstop>capTransparencyZ</tabstop>
   <tabstop>groupBoxView</tabstop>
   <tabstop>clipView</tabstop>
   <tabstop>fromView</tabstop>
@@ -248,6 +508,10 @@
   <tabstop>dirX</tabstop>
   <tabstop>dirY</tabstop>
   <tabstop>dirZ</tabstop>
+  <tabstop>capView</tabstop>
+  <tabstop>capModeView</tabstop>
+  <tabstop>capColorView</tabstop>
+  <tabstop>capTransparencyView</tabstop>
  </tabstops>
  <resources/>
  <connections>

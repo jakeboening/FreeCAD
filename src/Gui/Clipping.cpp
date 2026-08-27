@@ -25,13 +25,18 @@
 
 #include <Inventor/SbVec3f.h>
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QLabel>
 #include <QPointer>
 #include <QPushButton>
+#include <QSpinBox>
 
 #include <App/Application.h>
+#include <Base/Tools.h>
 
 #include "Clipping.h"
 #include "ui_Clipping.h"
@@ -40,6 +45,7 @@
 #include "View3DInventor.h"
 #include "View3DInventorViewer.h"
 #include "ViewClipping.h"
+#include "Widgets.h"
 
 using namespace Gui::Dialog;
 
@@ -71,6 +77,20 @@ void setSpinBoxValue(QDoubleSpinBox* box, double value)
 void setSpinBoxValue(QDoubleSpinBox* box, float value)
 {
     if (static_cast<float>(box->value()) != value) {
+        box->setValue(value);
+    }
+}
+
+/**
+ * Same again for the transparency boxes, which the state keeps as a fraction.
+ *
+ * The caller rounds to whole percent before getting here, so the comparison is
+ * exact and a value the user typed is never re-written from the rounded float
+ * it became.
+ */
+void setSpinBoxValue(QSpinBox* box, int value)
+{
+    if (box->value() != value) {
         box->setValue(value);
     }
 }
@@ -161,6 +181,136 @@ public:
         ui.dirY->setDisabled(followViewDir);
         ui.dirZ->setDisabled(followViewDir);
         ui.fromView->setDisabled(followViewDir);
+    }
+
+    /// The four widgets of one group's cap row.
+    struct CapWidgets
+    {
+        QCheckBox* cap;
+        QComboBox* mode;
+        Gui::ColorButton* color;
+        QSpinBox* transparency;
+    };
+
+    /**
+     * The cap row of one slot.
+     *
+     * Looked up rather than cached, so nothing has to be wired up after
+     * setupUi(); one helper can then serve all four groups instead of the four
+     * near-identical copies the rest of this panel still carries.
+     */
+    CapWidgets capWidgets(int slot) const
+    {
+        switch (slot) {
+            case Gui::ClipPlaneState::SlotX:
+                return {ui.capX, ui.capModeX, ui.capColorX, ui.capTransparencyX};
+            case Gui::ClipPlaneState::SlotY:
+                return {ui.capY, ui.capModeY, ui.capColorY, ui.capTransparencyY};
+            case Gui::ClipPlaneState::SlotZ:
+                return {ui.capZ, ui.capModeZ, ui.capColorZ, ui.capTransparencyZ};
+            default:
+                return {ui.capView, ui.capModeView, ui.capColorView, ui.capTransparencyView};
+        }
+    }
+
+    /**
+     * Whether this view can draw caps at all.
+     *
+     * Capping needs a stencil buffer, and stencilBits() only knows the answer
+     * once a frame has been drawn - it reports -1 until then. Treat that as
+     * "assume fine": the controls are re-checked on every syncFromState(), so a
+     * context that really has no stencil buffer still greys them out long
+     * before the user can act on them, whereas disabling on -1 would leave the
+     * panel dead on a perfectly capable view.
+     */
+    bool capsSupported() const
+    {
+        return !view || view->getViewer()->stencilBits() != 0;
+    }
+
+    /**
+     * Applies one cap row's enable rules, reading the widgets themselves.
+     *
+     * Called from the handlers so the row follows the click at once, and from
+     * syncFromState() so a change made anywhere else lands too. It must not run
+     * while its group box is unchecked: an unchecked QGroupBox disables its
+     * children wholesale, and re-enabling them here would undo that.
+     */
+    void updateCapRowEnabled(int slot)
+    {
+        const CapWidgets widgets = capWidgets(slot);
+        const bool supported = capsSupported();
+        const bool row = supported && widgets.cap->isChecked();
+
+        widgets.cap->setEnabled(supported);
+        widgets.mode->setEnabled(row);
+        widgets.transparency->setEnabled(row);
+        // Only a cap that is not taking the cut object's own colour has a
+        // colour of its own to pick.
+        const bool custom =
+            widgets.mode->currentIndex() == static_cast<int>(Gui::CapColorMode::CustomColor);
+        widgets.color->setEnabled(row && custom);
+    }
+
+    /// Pushes one plane's cap settings into its row. The caller holds `updating`.
+    void syncCapWidgets(int slot, const Gui::ClipPlaneState& plane)
+    {
+        const CapWidgets widgets = capWidgets(slot);
+
+        widgets.cap->setChecked(plane.capEnabled);
+        const int mode = static_cast<int>(plane.capColorMode);
+        if (widgets.mode->currentIndex() != mode) {
+            widgets.mode->setCurrentIndex(mode);
+        }
+        if (widgets.color->packedColor() != plane.capColor) {
+            widgets.color->setPackedColor(plane.capColor);
+        }
+        setSpinBoxValue(widgets.transparency,
+                        static_cast<int>(Base::toPercent(plane.capTransparency)));
+
+        // After the group box's own setChecked(), which enables and disables
+        // its children wholesale and would otherwise undo this.
+        if (plane.enabled) {
+            updateCapRowEnabled(slot);
+        }
+    }
+
+    void applyCapEnabled(int slot, bool on)
+    {
+        updateCapRowEnabled(slot);
+        editPlane(slot, [on](Gui::ClipPlaneState& plane) {
+            plane.capEnabled = on;
+        });
+    }
+
+    void applyCapColorMode(int slot, int index)
+    {
+        updateCapRowEnabled(slot);
+
+        const auto mode = index == static_cast<int>(Gui::CapColorMode::CustomColor)
+            ? Gui::CapColorMode::CustomColor
+            : Gui::CapColorMode::BodyColor;
+        editPlane(slot, [mode](Gui::ClipPlaneState& plane) {
+            plane.capColorMode = mode;
+        });
+    }
+
+    void applyCapColor(int slot)
+    {
+        // ColorButton has no colour in its signal, so read it back off the button.
+        const uint32_t color = capWidgets(slot).color->packedColor();
+        editPlane(slot, [color](Gui::ClipPlaneState& plane) {
+            plane.capColor = color;
+        });
+    }
+
+    /// The box shows whole percent; the state keeps a 0..1 fraction.
+    void applyCapTransparency(int slot, int percent)
+    {
+        const float transparency = Base::fromPercent(percent);
+        editPlane(slot, [transparency](Gui::ClipPlaneState& plane) {
+            plane.capTransparency = transparency;
+        });
     }
 };
 
@@ -337,6 +487,38 @@ void Clipping::setupConnections()
             this, &Clipping::onDirZValueChanged);
     connect(d->clearButton, &QPushButton::clicked,
             this, &Clipping::onClearAllClicked);
+    connect(d->ui.capX, &QCheckBox::toggled,
+            this, &Clipping::onCapXToggled);
+    connect(d->ui.capY, &QCheckBox::toggled,
+            this, &Clipping::onCapYToggled);
+    connect(d->ui.capZ, &QCheckBox::toggled,
+            this, &Clipping::onCapZToggled);
+    connect(d->ui.capView, &QCheckBox::toggled,
+            this, &Clipping::onCapViewToggled);
+    connect(d->ui.capModeX, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &Clipping::onCapModeXCurrentIndexChanged);
+    connect(d->ui.capModeY, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &Clipping::onCapModeYCurrentIndexChanged);
+    connect(d->ui.capModeZ, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &Clipping::onCapModeZCurrentIndexChanged);
+    connect(d->ui.capModeView, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &Clipping::onCapModeViewCurrentIndexChanged);
+    connect(d->ui.capColorX, &Gui::ColorButton::changed,
+            this, &Clipping::onCapColorXChanged);
+    connect(d->ui.capColorY, &Gui::ColorButton::changed,
+            this, &Clipping::onCapColorYChanged);
+    connect(d->ui.capColorZ, &Gui::ColorButton::changed,
+            this, &Clipping::onCapColorZChanged);
+    connect(d->ui.capColorView, &Gui::ColorButton::changed,
+            this, &Clipping::onCapColorViewChanged);
+    connect(d->ui.capTransparencyX, qOverload<int>(&QSpinBox::valueChanged),
+            this, &Clipping::onCapTransparencyXValueChanged);
+    connect(d->ui.capTransparencyY, qOverload<int>(&QSpinBox::valueChanged),
+            this, &Clipping::onCapTransparencyYValueChanged);
+    connect(d->ui.capTransparencyZ, qOverload<int>(&QSpinBox::valueChanged),
+            this, &Clipping::onCapTransparencyZValueChanged);
+    connect(d->ui.capTransparencyView, qOverload<int>(&QSpinBox::valueChanged),
+            this, &Clipping::onCapTransparencyViewValueChanged);
     // clang-format on
 }
 
@@ -357,14 +539,17 @@ void Clipping::syncFromState()
     const ClipPlaneState& planeX = state.planes[ClipPlaneState::SlotX];
     d->ui.groupBoxX->setChecked(planeX.enabled);
     setSpinBoxValue(d->ui.clipX, planeX.offset);
+    d->syncCapWidgets(ClipPlaneState::SlotX, planeX);
 
     const ClipPlaneState& planeY = state.planes[ClipPlaneState::SlotY];
     d->ui.groupBoxY->setChecked(planeY.enabled);
     setSpinBoxValue(d->ui.clipY, planeY.offset);
+    d->syncCapWidgets(ClipPlaneState::SlotY, planeY);
 
     const ClipPlaneState& planeZ = state.planes[ClipPlaneState::SlotZ];
     d->ui.groupBoxZ->setChecked(planeZ.enabled);
     setSpinBoxValue(d->ui.clipZ, planeZ.offset);
+    d->syncCapWidgets(ClipPlaneState::SlotZ, planeZ);
 
     const ClipPlaneState& custom = state.planes[ClipPlaneState::SlotCustom];
     d->ui.groupBoxView->setChecked(custom.enabled);
@@ -380,6 +565,12 @@ void Clipping::syncFromState()
     if (custom.enabled) {
         d->setViewDirWidgetsEnabled(custom.followViewDir);
     }
+    d->syncCapWidgets(ClipPlaneState::SlotCustom, custom);
+
+    // Asked again on every change rather than once at startup: the viewer only
+    // learns how many stencil bits it got when it draws its first frame, which
+    // may well be after this panel was built.
+    d->ui.stencilWarning->setVisible(!d->capsSupported());
 
     d->updating = false;
 }
@@ -619,6 +810,165 @@ void Clipping::onClearAllClicked()
     if (ViewClipping* clipping = d->clipping()) {
         clipping->clear();
     }
+}
+
+/**
+ * Turning a cap on or off.
+ *
+ * Nothing here decides whether the cap can be drawn - that is the viewer's
+ * business - so this only records the wish and moves the rest of the row with
+ * it.
+ */
+void Clipping::onCapXToggled(bool on)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapEnabled(ClipPlaneState::SlotX, on);
+}
+
+void Clipping::onCapYToggled(bool on)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapEnabled(ClipPlaneState::SlotY, on);
+}
+
+void Clipping::onCapZToggled(bool on)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapEnabled(ClipPlaneState::SlotZ, on);
+}
+
+void Clipping::onCapViewToggled(bool on)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapEnabled(ClipPlaneState::SlotCustom, on);
+}
+
+/// The combo box is filled in the .ui in enum order, so the index is the mode.
+void Clipping::onCapModeXCurrentIndexChanged(int index)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColorMode(ClipPlaneState::SlotX, index);
+}
+
+void Clipping::onCapModeYCurrentIndexChanged(int index)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColorMode(ClipPlaneState::SlotY, index);
+}
+
+void Clipping::onCapModeZCurrentIndexChanged(int index)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColorMode(ClipPlaneState::SlotZ, index);
+}
+
+void Clipping::onCapModeViewCurrentIndexChanged(int index)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColorMode(ClipPlaneState::SlotCustom, index);
+}
+
+void Clipping::onCapColorXChanged()
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColor(ClipPlaneState::SlotX);
+}
+
+void Clipping::onCapColorYChanged()
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColor(ClipPlaneState::SlotY);
+}
+
+void Clipping::onCapColorZChanged()
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColor(ClipPlaneState::SlotZ);
+}
+
+void Clipping::onCapColorViewChanged()
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapColor(ClipPlaneState::SlotCustom);
+}
+
+/**
+ * Transparency applies in both colour modes.
+ *
+ * It is the cut face's own transparency, not the picked colour's alpha, which
+ * is why the colour button is left without an alpha channel and this box sits
+ * outside the mode it belongs to.
+ */
+void Clipping::onCapTransparencyXValueChanged(int percent)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapTransparency(ClipPlaneState::SlotX, percent);
+}
+
+void Clipping::onCapTransparencyYValueChanged(int percent)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapTransparency(ClipPlaneState::SlotY, percent);
+}
+
+void Clipping::onCapTransparencyZValueChanged(int percent)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapTransparency(ClipPlaneState::SlotZ, percent);
+}
+
+void Clipping::onCapTransparencyViewValueChanged(int percent)
+{
+    if (d->updating) {
+        return;
+    }
+
+    d->applyCapTransparency(ClipPlaneState::SlotCustom, percent);
 }
 
 #include "moc_Clipping.cpp"

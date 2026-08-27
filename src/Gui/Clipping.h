@@ -78,6 +78,22 @@ protected:
     void onDirYValueChanged(double);
     void onDirZValueChanged(double);
     void onClearAllClicked();
+    void onCapXToggled(bool);
+    void onCapYToggled(bool);
+    void onCapZToggled(bool);
+    void onCapViewToggled(bool);
+    void onCapModeXCurrentIndexChanged(int);
+    void onCapModeYCurrentIndexChanged(int);
+    void onCapModeZCurrentIndexChanged(int);
+    void onCapModeViewCurrentIndexChanged(int);
+    void onCapColorXChanged();
+    void onCapColorYChanged();
+    void onCapColorZChanged();
+    void onCapColorViewChanged();
+    void onCapTransparencyXValueChanged(int);
+    void onCapTransparencyYValueChanged(int);
+    void onCapTransparencyZValueChanged(int);
+    void onCapTransparencyViewValueChanged(int);
 
 public:
     void reject() override;

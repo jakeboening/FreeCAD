@@ -110,6 +110,7 @@ class RubberbandOverlay;
 class SoShapeScale;
 class ViewerEventFilter;
 class ViewClipping;
+class ClippingCapRenderer;
 
 /** GUI view into a 3D scene provided by View3DInventor
  *
@@ -697,8 +698,11 @@ private:
     SoGroup* clipGroup;
     std::unique_ptr<ViewClipping> clippingState;
     mutable int stencilBitCount {-1};
+    std::unique_ptr<ClippingCapRenderer> capRenderer;
     /// Fills stencilBitCount on the first frame; needs a current context.
     void probeStencilBits() const;
+    /// Fills the cross-sections the clipping planes expose. No-op unless one asks for it.
+    void renderClippingCaps();
     // Child group in the scene graph that contains view providers related to the physical object
     SoGroup* objectGroup;
 

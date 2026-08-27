@@ -126,6 +126,7 @@
 
 #include "View3DInventorViewer.h"
 #include "ViewClipping.h"
+#include "ClippingCapRenderer.h"
 #include "Application.h"
 #include "Camera.h"
 #include "Command.h"
@@ -1379,7 +1380,8 @@ View3DInventorViewer::~View3DInventorViewer()
     // the root node but isn't destroyed when closing this viewer so
     // that it prevents all children from being deleted. To reduce this
     // likelihood we explicitly remove all child nodes now.
-    // Before the graph goes: it holds nodes inside clipGroup.
+    // Before the graph goes: these hold nodes inside it.
+    capRenderer.reset();
     clippingState.reset();
 
     coinRemoveAllChildren(this->pcViewProviderRoot);
@@ -1686,6 +1688,23 @@ bool View3DInventorViewer::hasClipping() const
 int View3DInventorViewer::stencilBits() const
 {
     return stencilBitCount;
+}
+
+void View3DInventorViewer::renderClippingCaps()
+{
+    // Nothing to do for the overwhelmingly common case of a view that is not
+    // clipped, so this stays cheap enough to call unconditionally per frame.
+    if (!clippingState || !clippingState->state().anyCapEnabled()) {
+        return;
+    }
+    if (stencilBitCount == 0) {
+        return;
+    }
+
+    if (!capRenderer) {
+        capRenderer = std::make_unique<ClippingCapRenderer>(*this);
+    }
+    capRenderer->render(clippingState->state());
 }
 
 void View3DInventorViewer::probeStencilBits() const
@@ -3272,6 +3291,7 @@ bool View3DInventorViewer::renderToFramebuffer(QOpenGLFramebufferObject* fbo, bo
         SoNode* scene = this->getSceneGraph();
         gl.apply(scene == this->viewerSceneRoot ? this->selectionRoot : scene);
     }
+    renderClippingCaps();
     renderDelayedAnnotations(&gl);
     gl.apply(this->foregroundroot);
     if (shouldRenderDecorations(currentRenderIntent())) {
@@ -3443,6 +3463,7 @@ void View3DInventorViewer::renderGLActionScene(const QColor& backgroundColor, So
     try {
         // Render normal scenegraph.
         inherited::actualRedraw();
+        renderClippingCaps();
         renderDelayedAnnotations(glra);
     }
     catch (const Base::MemoryException&) {
