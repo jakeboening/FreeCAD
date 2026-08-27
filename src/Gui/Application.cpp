@@ -2621,11 +2621,12 @@ void Application::runApplication()
             // unfortunately, inconsistent between platforms. Requesting an alpha
             // channel tends to steer it away from weird legacy choices like RGB565.
             defaultFormat.setAlphaBufferSize(8);
-            // And a depth/stencil buffer is generally useful if we can have it.
-            defaultFormat.setDepthBufferSize(24);
-            defaultFormat.setStencilBufferSize(8);
         }
 #endif
+        // Not platform specific: clipping caps mark the cut with the stencil
+        // buffer, so ask for one everywhere rather than only under Wayland.
+        defaultFormat.setDepthBufferSize(24);
+        defaultFormat.setStencilBufferSize(8);
         QSurfaceFormat::setDefaultFormat(defaultFormat);
     }
 

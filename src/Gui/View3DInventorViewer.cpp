@@ -100,7 +100,9 @@
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
+#include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QScopeGuard>
 #include <QSurfaceFormat>
@@ -1681,6 +1683,53 @@ bool View3DInventorViewer::hasClipping() const
     return clippingState != nullptr;
 }
 
+int View3DInventorViewer::stencilBits() const
+{
+    return stencilBitCount;
+}
+
+void View3DInventorViewer::probeStencilBits() const
+{
+    if (stencilBitCount >= 0) {
+        return;
+    }
+
+    // Asking QSurfaceFormat is not good enough: for a QOpenGLWidget that
+    // describes the context, while the drawing actually goes to a framebuffer
+    // object Qt manages, whose attachments are what matter here. So ask GL,
+    // and only once the context is current.
+    GLint bits = 0;
+    glGetIntegerv(GL_STENCIL_BITS, &bits);
+
+    if (bits == 0) {
+        if (QOpenGLContext* context = QOpenGLContext::currentContext()) {
+            GLint type = GL_NONE;
+            context->functions()->glGetFramebufferAttachmentParameteriv(
+                GL_FRAMEBUFFER,
+                GL_STENCIL_ATTACHMENT,
+                GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+                &type
+            );
+            if (type != GL_NONE) {
+                context->functions()->glGetFramebufferAttachmentParameteriv(
+                    GL_FRAMEBUFFER,
+                    GL_STENCIL_ATTACHMENT,
+                    GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE,
+                    &bits
+                );
+            }
+        }
+    }
+
+    stencilBitCount = bits;
+
+    if (bits == 0) {
+        Base::Console().warning(
+            "No stencil buffer in this OpenGL context; clipping caps are unavailable.\n"
+        );
+    }
+}
+
 SoGroup* View3DInventorViewer::getObjectGroup() const
 {
     return this->objectGroup;
@@ -3014,7 +3063,9 @@ void View3DInventorViewer::setRenderType(RenderType type)
                 gl->makeCurrent();
                 QOpenGLFramebufferObjectFormat fboFormat;
                 fboFormat.setSamples(getNumSamples());
-                fboFormat.setAttachment(QOpenGLFramebufferObject::Depth);
+                // CombinedDepthStencil, not Depth: without a stencil attachment
+                // the clipping caps cannot be drawn into a saved image.
+                fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
                 auto fbo = new QOpenGLFramebufferObject(width, height, fboFormat);
                 if (fbo->format().samples() > 0 && hasFramebufferBlitSupport()) {
                     if (!renderToFramebuffer(fbo)) {
@@ -3034,7 +3085,9 @@ void View3DInventorViewer::setRenderType(RenderType type)
                         );
                         delete fbo;
                         QOpenGLFramebufferObjectFormat fallbackFormat;
-                        fallbackFormat.setAttachment(QOpenGLFramebufferObject::Depth);
+                        fallbackFormat.setAttachment(
+                            QOpenGLFramebufferObject::CombinedDepthStencil
+                        );
                         fbo = new QOpenGLFramebufferObject(width, height, fallbackFormat);
                     }
                     if (!renderToFramebuffer(fbo)) {
@@ -3094,7 +3147,7 @@ QImage View3DInventorViewer::renderToImage(const RenderImageOptions& options)
 
     QOpenGLFramebufferObjectFormat fboFormat;
     fboFormat.setSamples(samples);
-    fboFormat.setAttachment(QOpenGLFramebufferObject::Depth);
+    fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
     // With enabled alpha a transparent background is supported but
     // at the same time breaks semi-transparent models. A workaround
     // is to use a certain background color using GL_RGB as texture
@@ -3421,6 +3474,10 @@ void View3DInventorViewer::renderScene()
     SbVec2s origin = vp.getViewportOriginPixels();
     SbVec2s size = vp.getViewportSizePixels();
     glViewport(origin[0], origin[1], size[0], size[1]);
+
+    // First frame: the context is current here, which is the only place it is
+    // safe to ask what we actually got.
+    probeStencilBits();
 
     const QColor col = this->backgroundColor();
     glClearColor(float(col.redF()), float(col.greenF()), float(col.blueF()), 0.0F);

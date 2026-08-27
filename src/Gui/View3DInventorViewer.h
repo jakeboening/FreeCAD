@@ -299,6 +299,13 @@ public:
     ViewClipping& clipping();
     /// True when clipping exists, for callers that must not bring it into being.
     bool hasClipping() const;
+    /** Stencil bits this view's OpenGL context actually gives us.
+     *
+     * -1 until the first frame has been drawn, 0 when there is no stencil
+     * buffer at all - in which case the clipping caps cannot be rendered and
+     * the panel says so instead of showing controls that do nothing.
+     */
+    int stencilBits() const;
     /// Group holding the view providers of the physical objects.
     SoGroup* getObjectGroup() const;
     void setupEditingRoot(SoNode* node = nullptr, const Base::Matrix4D* mat = nullptr);
@@ -689,6 +696,9 @@ private:
     // dimensions and the on-top selection alone.
     SoGroup* clipGroup;
     std::unique_ptr<ViewClipping> clippingState;
+    mutable int stencilBitCount {-1};
+    /// Fills stencilBitCount on the first frame; needs a current context.
+    void probeStencilBits() const;
     // Child group in the scene graph that contains view providers related to the physical object
     SoGroup* objectGroup;
 

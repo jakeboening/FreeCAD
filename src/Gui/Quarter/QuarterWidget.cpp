@@ -157,6 +157,14 @@ public:
         surfaceFormat.setProfile(QSurfaceFormat::CompatibilityProfile);
         surfaceFormat.setOption(QSurfaceFormat::DeprecatedFunctions, true);
 
+        // Clipping caps mark the cut in the stencil buffer. Every FreeCAD 3D
+        // view is built here, so requesting it here covers them all - including
+        // the ones whose caller default-constructed the format and so dropped
+        // whatever QSurfaceFormat::defaultFormat() asked for.
+        if (surfaceFormat.stencilBufferSize() < 8) {
+            surfaceFormat.setStencilBufferSize(8);
+        }
+
 #if defined (_DEBUG) && 0
         surfaceFormat.setOption(QSurfaceFormat::DebugContext);
 #endif
@@ -240,7 +248,7 @@ QuarterWidget::QuarterWidget(QWidget * parent, const QOpenGLWidget * sharewidget
   : inherited(parent)
 {
   Q_UNUSED(f); 
-  this->constructor(QSurfaceFormat(), sharewidget);
+  this->constructor(QSurfaceFormat::defaultFormat(), sharewidget);
 }
 
 /*! constructor */

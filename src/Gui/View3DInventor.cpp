@@ -113,7 +113,10 @@ View3DInventor::View3DInventor(
     bool smoothing = false;
     bool glformat = false;
     int samples = View3DInventorViewer::getNumSamples();
-    QSurfaceFormat f;
+    // Start from the application default rather than from a bare QSurfaceFormat:
+    // default-constructing one throws away everything runApplication() asked
+    // for, including the stencil buffer the clipping caps need.
+    QSurfaceFormat f = QSurfaceFormat::defaultFormat();
 
     if (samples > 1) {
         glformat = true;
