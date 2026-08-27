@@ -995,6 +995,7 @@ View3DInventorViewer::View3DInventorViewer(QWidget* parent, const QOpenGLWidget*
     : Quarter::SoQTQuarterAdaptor(parent, sharewidget)
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
+    , clippedContent(nullptr)
     , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
@@ -1020,6 +1021,7 @@ View3DInventorViewer::View3DInventorViewer(
     : Quarter::SoQTQuarterAdaptor(format, parent, sharewidget)
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
+    , clippedContent(nullptr)
     , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
@@ -1237,19 +1239,30 @@ void View3DInventorViewer::init()
     pcEditingRoot->addChild(pcEditingTransform);
     pcViewProviderRoot->addChild(pcEditingRoot);
 
-    // Clipping planes go here, ahead of the model geometry. Everything added to
-    // pcViewProviderRoot before this point - the editing root, the dimensions,
-    // the on-top selection - stays unclipped.
+    // The clipping planes and the geometry they act on, wrapped together in a
+    // separator. Everything added to pcViewProviderRoot before this point - the
+    // editing root, the dimensions, the on-top selection - is outside it and so
+    // is not clipped; and because it is a separator rather than a group, neither
+    // is anything appended after it. That second part matters: view providers
+    // that answer false to isPartOfPhysicalObject(), measurements among them, are
+    // deliberately kept out of the object group, and are then appended here. A
+    // plain group would have let the planes reach them anyway and clipped the
+    // very annotations that say what the model measures.
+    clippedContent = new SoSeparator();
+    clippedContent->ref();
+    clippedContent->setName("ClippedContent");
+    pcViewProviderRoot->addChild(clippedContent);
+
     clipGroup = new SoGroup();
     clipGroup->ref();
     clipGroup->setName("ClipPlanes");
-    pcViewProviderRoot->addChild(clipGroup);
+    clippedContent->addChild(clipGroup);
 
     // Create group for the physical object
     objectGroup = new SoGroup();
     objectGroup->ref();
     objectGroup->setName("ObjectGroup");
-    pcViewProviderRoot->addChild(objectGroup);
+    clippedContent->addChild(objectGroup);
 
     // Set our own render action which show a bounding box if
     // the SoFCSelection::BOX style is set
@@ -1392,6 +1405,8 @@ View3DInventorViewer::~View3DInventorViewer()
     this->objectGroup = nullptr;
     this->clipGroup->unref();
     this->clipGroup = nullptr;
+    this->clippedContent->unref();
+    this->clippedContent = nullptr;
     this->backlight->unref();
     this->backlight = nullptr;
     this->fillLight->unref();

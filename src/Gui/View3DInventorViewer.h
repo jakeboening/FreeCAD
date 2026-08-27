@@ -711,9 +711,13 @@ private:
 
     // Scene graph root
     SoSeparator* pcViewProviderRoot;
+    // Separator holding the clipping planes and the geometry they act on. Being a
+    // separator is the point: it stops the planes reaching anything added to
+    // pcViewProviderRoot afterwards, such as measurements.
+    SoSeparator* clippedContent;
     // Holds the clipping planes of the Clipping panel. It sits immediately before
-    // objectGroup, so the planes clip the model but leave the editing root, the
-    // dimensions and the on-top selection alone.
+    // objectGroup inside clippedContent, so the planes clip the model and nothing
+    // else.
     SoGroup* clipGroup;
     std::unique_ptr<ViewClipping> clippingState;
     mutable int stencilBitCount {-1};
