@@ -107,6 +107,7 @@
 #include <QScopeGuard>
 #include <QSurfaceFormat>
 #include <QTimer>
+#include <QAbstractAnimation>
 #include <QVariantAnimation>
 #include <QWheelEvent>
 
@@ -5151,6 +5152,102 @@ void View3DInventorViewer::startSpinningAnimation(const SbVec3f& axis, float vel
 void View3DInventorViewer::stopAnimating()
 {
     navigation->stopAnimating();
+}
+
+View3DInventorViewer::CameraPose View3DInventorViewer::cameraPose() const
+{
+    CameraPose pose;
+
+    SoCamera* camera = getSoRenderManager()->getCamera();
+    if (!camera) {
+        return pose;
+    }
+
+    pose.position = camera->position.getValue();
+    pose.orientation = camera->orientation.getValue();
+    pose.focalDistance = camera->focalDistance.getValue();
+
+    if (camera->isOfType(SoOrthographicCamera::getClassTypeId())) {
+        pose.zoom = static_cast<SoOrthographicCamera*>(camera)->height.getValue();
+    }
+    else if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
+        pose.zoom = static_cast<SoPerspectiveCamera*>(camera)->heightAngle.getValue();
+    }
+
+    return pose;
+}
+
+void View3DInventorViewer::setCameraPose(const CameraPose& pose)
+{
+    SoCamera* camera = getSoRenderManager()->getCamera();
+    if (!camera) {
+        return;
+    }
+
+    camera->position = pose.position;
+    camera->orientation = pose.orientation;
+    camera->focalDistance = pose.focalDistance;
+
+    if (pose.zoom > 0.0F) {
+        if (camera->isOfType(SoOrthographicCamera::getClassTypeId())) {
+            static_cast<SoOrthographicCamera*>(camera)->height = pose.zoom;
+        }
+        else if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
+            static_cast<SoPerspectiveCamera*>(camera)->heightAngle = pose.zoom;
+        }
+    }
+}
+
+void View3DInventorViewer::animateCameraTo(const CameraPose& pose, int duration)
+{
+    const CameraPose from = cameraPose();
+
+    if (!isAnimationEnabled()) {
+        setCameraPose(pose);
+        return;
+    }
+
+    ParameterGrp::handle hGrp =
+        App::GetApplication().GetParameterGroupByPath("User parameter:BaseApp/Preferences/View");
+    if (duration < 0) {
+        duration = static_cast<int>(hGrp->GetInt("AnimationDuration", 500));
+    }
+    const auto easing = static_cast<QEasingCurve::Type>(
+        hGrp->GetInt("NavigationAnimationEasingCurve", QEasingCurve::Type::InOutCubic)
+    );
+
+    // Whatever the navigation style was doing to the camera, this supersedes it.
+    stopAnimating();
+
+    auto* animation = new QVariantAnimation(this);
+    animation->setStartValue(0.0F);
+    animation->setEndValue(1.0F);
+    animation->setDuration(duration);
+    animation->setEasingCurve(easing);
+
+    connect(animation, &QVariantAnimation::valueChanged, this, [this, from, pose](const QVariant& value) {
+        const float t = value.toFloat();
+
+        CameraPose step;
+        step.position = from.position * (1.0F - t) + pose.position * t;
+        step.orientation = SbRotation::slerp(from.orientation, pose.orientation, t);
+        step.focalDistance = from.focalDistance * (1.0F - t) + pose.focalDistance * t;
+
+        // Zoom is a ratio, not a distance: interpolated geometrically it reads as
+        // one steady movement rather than a rush followed by a crawl.
+        step.zoom = (from.zoom > 0.0F && pose.zoom > 0.0F)
+            ? from.zoom * std::pow(pose.zoom / from.zoom, t)
+            : from.zoom * (1.0F - t) + pose.zoom * t;
+
+        setCameraPose(step);
+    });
+
+    // The last frame lands on the pose itself rather than on an interpolation of it.
+    connect(animation, &QVariantAnimation::finished, this, [this, pose]() {
+        setCameraPose(pose);
+    });
+
+    animation->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void View3DInventorViewer::setPopupMenuEnabled(bool on)

@@ -1280,6 +1280,7 @@ SOURCE_GROUP("View" FILES ${View_SRCS})
 
 # The workbench sources
 SET(Workbench_CPP_SRCS
+    ContextMenuToolBar.cpp
     DockWindowManager.cpp
     OverlayManager.cpp
     OverlayWidgets.cpp
@@ -1297,6 +1298,7 @@ SET(Workbench_CPP_SRCS
 )
 SET(Workbench_SRCS
     ${Workbench_CPP_SRCS}
+    ContextMenuToolBar.h
     DockWindowManager.h
     OverlayManager.h
     OverlayWidgets.h
