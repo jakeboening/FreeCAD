@@ -44,6 +44,7 @@
 #include "Command.h"
 #include "MainWindow.h"
 #include "OverlayWidgets.h"
+#include "UiZoom.h"
 #include "WidgetFactory.h"
 
 
@@ -649,7 +650,9 @@ int ToolBarManager::toolBarIconSize(QWidget* widget) const
             }
         }
     }
-    return std::max(s, 5);
+    // The stored sizes stay the user's chosen base; the interface zoom is a
+    // multiplier on top, so the two settings never clobber each other.
+    return std::max(UiZoom::instance().scaled(s), 5);
 }
 
 void ToolBarManager::setupToolBarIconSize()

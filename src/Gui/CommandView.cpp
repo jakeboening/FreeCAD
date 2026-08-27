@@ -89,6 +89,7 @@
 #include "Tools.h"
 #include "Tree.h"
 #include "TreeParams.h"
+#include "UiZoom.h"
 #include "Utilities.h"
 #include "View3DInventor.h"
 #include "View3DInventorViewer.h"
@@ -3977,6 +3978,97 @@ bool StdCmdToggleBottomPanels::isActive()
 }
 
 //===========================================================================
+// Std_UiZoomIn
+//===========================================================================
+// Every user-visible string on these three says "Interface", because the View
+// menu already carries a Zoom submenu holding Std_ViewZoomIn/Std_ViewZoomOut -
+// and that one moves the camera, not the chrome.
+DEF_STD_CMD_A(StdCmdUiZoomIn)
+
+StdCmdUiZoomIn::StdCmdUiZoomIn()
+    : Command("Std_UiZoomIn")
+{
+    sGroup = "View";
+    sMenuText = QT_TR_NOOP("Zoom In &Interface");
+    sToolTipText = QT_TR_NOOP("Makes the interface larger: text, icons and spacing");
+    sWhatsThis = "Std_UiZoomIn";
+    sStatusTip = sToolTipText;
+    sPixmap = "zoom-in";
+    // Not the VS Code keys: Ctrl++ and Ctrl+- already belong to the 3D camera
+    // zoom, and Ctrl+0 to Std_ToggleBottomPanels.
+    sAccel = "Ctrl+Alt+=";
+    eType = NoTransaction;
+}
+
+void StdCmdUiZoomIn::activated(int iMsg)
+{
+    Q_UNUSED(iMsg);
+    UiZoom::instance().zoomIn();
+}
+
+bool StdCmdUiZoomIn::isActive()
+{
+    return UiZoom::instance().canZoomIn();
+}
+
+//===========================================================================
+// Std_UiZoomOut
+//===========================================================================
+DEF_STD_CMD_A(StdCmdUiZoomOut)
+
+StdCmdUiZoomOut::StdCmdUiZoomOut()
+    : Command("Std_UiZoomOut")
+{
+    sGroup = "View";
+    sMenuText = QT_TR_NOOP("Zoom Out I&nterface");
+    sToolTipText = QT_TR_NOOP("Makes the interface smaller, leaving more room for the 3D view");
+    sWhatsThis = "Std_UiZoomOut";
+    sStatusTip = sToolTipText;
+    sPixmap = "zoom-out";
+    sAccel = "Ctrl+Alt+-";
+    eType = NoTransaction;
+}
+
+void StdCmdUiZoomOut::activated(int iMsg)
+{
+    Q_UNUSED(iMsg);
+    UiZoom::instance().zoomOut();
+}
+
+bool StdCmdUiZoomOut::isActive()
+{
+    return UiZoom::instance().canZoomOut();
+}
+
+//===========================================================================
+// Std_UiZoomReset
+//===========================================================================
+DEF_STD_CMD_A(StdCmdUiZoomReset)
+
+StdCmdUiZoomReset::StdCmdUiZoomReset()
+    : Command("Std_UiZoomReset")
+{
+    sGroup = "View";
+    sMenuText = QT_TR_NOOP("&Reset Interface Zoom");
+    sToolTipText = QT_TR_NOOP("Returns the interface to its unscaled size");
+    sWhatsThis = "Std_UiZoomReset";
+    sStatusTip = sToolTipText;
+    sAccel = "Ctrl+Alt+0";
+    eType = NoTransaction;
+}
+
+void StdCmdUiZoomReset::activated(int iMsg)
+{
+    Q_UNUSED(iMsg);
+    UiZoom::instance().reset();
+}
+
+bool StdCmdUiZoomReset::isActive()
+{
+    return UiZoom::instance().percent() != UiZoom::DefaultPercent;
+}
+
+//===========================================================================
 // Std_StoreWorkingView
 //===========================================================================
 DEF_STD_CMD_A(StdStoreWorkingView)
@@ -4325,6 +4417,9 @@ void CreateViewStdCommands()
     rcCmdMgr.addCommand(new StdCmdTreeViewActions());
     rcCmdMgr.addCommand(new StdCmdDockOverlay());
     rcCmdMgr.addCommand(new StdCmdToggleBottomPanels());
+    rcCmdMgr.addCommand(new StdCmdUiZoomIn());
+    rcCmdMgr.addCommand(new StdCmdUiZoomOut());
+    rcCmdMgr.addCommand(new StdCmdUiZoomReset());
 
     auto hGrp = App::GetApplication().GetParameterGroupByPath(
         "User parameter:BaseApp/Preferences/View"
