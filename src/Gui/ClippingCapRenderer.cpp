@@ -658,6 +658,7 @@ public:
         blend = glIsEnabled(GL_BLEND);
         cullFace = glIsEnabled(GL_CULL_FACE);
         polygonOffsetFill = glIsEnabled(GL_POLYGON_OFFSET_FILL);
+        lighting = glIsEnabled(GL_LIGHTING);
 
         glGetIntegerv(GL_STENCIL_WRITEMASK, &stencilWriteMask);
         glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &stencilBackWriteMask);
@@ -695,6 +696,19 @@ public:
         // NONE means Coin will not enable blending for the cap quad itself.
         glDisable(GL_CULL_FACE);
         glFrontFace(GL_CCW);
+
+        // Lighting off, by hand rather than by leaving it to the SoLightModel in
+        // quadRoot. Coin sends light-model changes lazily, and a fresh render
+        // action assumes GL starts in its default state - so when the previous
+        // traversal has left GL_LIGHTING enabled, the glDisable() that BASE_COLOR
+        // implies is never issued, and the quad is lit instead. There is no light
+        // in quadRoot, so all that survives is the ambient term and the cap comes
+        // out nearly black. It only showed in the Shaded draw style, because the
+        // other styles happen to draw unlit lines last and leave lighting off.
+        // The cap is meant to be flat anyway: its shading is folded into the
+        // colour before it ever reaches Coin.
+        glDisable(GL_LIGHTING);
+
         glEnable(GL_BLEND);
         gl->glBlendFuncSeparate(
             GL_SRC_ALPHA,
@@ -765,6 +779,7 @@ public:
 
         glFrontFace(static_cast<GLenum>(frontFace));
         setEnabled(GL_CULL_FACE, cullFace);
+        setEnabled(GL_LIGHTING, lighting);
 
         glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
         setEnabled(GL_POLYGON_OFFSET_FILL, polygonOffsetFill);
@@ -788,6 +803,7 @@ private:
     GLboolean scissorTest {GL_FALSE};
     GLboolean blend {GL_FALSE};
     GLboolean cullFace {GL_FALSE};
+    GLboolean lighting {GL_FALSE};
     GLboolean polygonOffsetFill {GL_FALSE};
 
     GLint stencilWriteMask {~0};
