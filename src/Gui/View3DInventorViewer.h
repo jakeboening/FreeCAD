@@ -220,6 +220,25 @@ public:
     void startSpinningAnimation(const SbVec3f& axis, float velocity);
     void stopAnimating();
 
+    /// Everything needed to put the camera back exactly where it was.
+    struct CameraPose
+    {
+        SbVec3f position;
+        SbRotation orientation;
+        float focalDistance {1.0F};
+        /// height for an orthographic camera, heightAngle for a perspective one
+        float zoom {0.0F};
+    };
+
+    CameraPose cameraPose() const;
+    void setCameraPose(const CameraPose& pose);
+    /**
+     * Glide the camera to @a pose over the duration and easing curve the
+     * navigation animations use, so a move back matches the move out.
+     * Applies the pose outright when animation is switched off.
+     */
+    void animateCameraTo(const CameraPose& pose, int duration = -1);
+
     void setPopupMenuEnabled(bool on);
     bool isPopupMenuEnabled() const;
 
