@@ -135,16 +135,15 @@ Clipping::Clipping(Gui::View3DInventor* view, App::Document* showOn, QWidget* pa
 
     d->view = view;
     View3DInventorViewer* viewer = view->getViewer();
-    d->node = static_cast<SoGroup*>(viewer->getSceneGraph());
+    // The viewer keeps a group for these, sitting just ahead of the model
+    // geometry: the planes clip the model, and leave the editing root, the
+    // dimensions and the on-top selection alone.
+    d->node = viewer->getClipPlaneGroup();
     d->node->ref();
-    int index = -1;
-    if (auto editingRoot = viewer->getEditingRoot()) {
-        index = d->node->findChild(editingRoot);
-    }
-    d->node->insertChild(d->clipX, index + 1);
-    d->node->insertChild(d->clipY, index + 1);
-    d->node->insertChild(d->clipZ, index + 1);
-    d->node->insertChild(d->clipView, index + 1);
+    d->node->addChild(d->clipX);
+    d->node->addChild(d->clipY);
+    d->node->addChild(d->clipZ);
+    d->node->addChild(d->clipView);
 
     SoGetBoundingBoxAction action(viewer->getSoRenderManager()->getViewportRegion());
     action.apply(viewer->getSceneGraph());

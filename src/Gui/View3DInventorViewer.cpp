@@ -990,6 +990,7 @@ View3DInventorViewer::View3DInventorViewer(QWidget* parent, const QOpenGLWidget*
     : Quarter::SoQTQuarterAdaptor(parent, sharewidget)
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
+    , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
     , renderType(Native)
@@ -1014,6 +1015,7 @@ View3DInventorViewer::View3DInventorViewer(
     : Quarter::SoQTQuarterAdaptor(format, parent, sharewidget)
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
+    , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
     , renderType(Native)
@@ -1230,6 +1232,14 @@ void View3DInventorViewer::init()
     pcEditingRoot->addChild(pcEditingTransform);
     pcViewProviderRoot->addChild(pcEditingRoot);
 
+    // Clipping planes go here, ahead of the model geometry. Everything added to
+    // pcViewProviderRoot before this point - the editing root, the dimensions,
+    // the on-top selection - stays unclipped.
+    clipGroup = new SoGroup();
+    clipGroup->ref();
+    clipGroup->setName("ClipPlanes");
+    pcViewProviderRoot->addChild(clipGroup);
+
     // Create group for the physical object
     objectGroup = new SoGroup();
     objectGroup->ref();
@@ -1371,6 +1381,8 @@ View3DInventorViewer::~View3DInventorViewer()
     this->pcViewProviderRoot = nullptr;
     this->objectGroup->unref();
     this->objectGroup = nullptr;
+    this->clipGroup->unref();
+    this->clipGroup = nullptr;
     this->backlight->unref();
     this->backlight = nullptr;
     this->fillLight->unref();
@@ -1645,6 +1657,16 @@ void View3DInventorViewer::setEditingTransform(const Base::Matrix4D& mat)
 SoNode* View3DInventorViewer::getEditingRoot() const
 {
     return pcEditingRoot;
+}
+
+SoGroup* View3DInventorViewer::getClipPlaneGroup() const
+{
+    return this->clipGroup;
+}
+
+SoGroup* View3DInventorViewer::getObjectGroup() const
+{
+    return this->objectGroup;
 }
 
 void View3DInventorViewer::setupEditingRoot(SoNode* node, const Base::Matrix4D* mat)

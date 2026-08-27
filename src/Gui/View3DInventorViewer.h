@@ -288,6 +288,10 @@ public:
     /// reset from edit mode
     void resetEditingViewProvider();
     SoNode* getEditingRoot() const;
+    /// Group the clipping planes live in, ahead of the model geometry.
+    SoGroup* getClipPlaneGroup() const;
+    /// Group holding the view providers of the physical objects.
+    SoGroup* getObjectGroup() const;
     void setupEditingRoot(SoNode* node = nullptr, const Base::Matrix4D* mat = nullptr);
     void resetEditingRoot(bool updateLinks = true);
     void setEditingTransform(const Base::Matrix4D& mat);
@@ -671,6 +675,10 @@ private:
 
     // Scene graph root
     SoSeparator* pcViewProviderRoot;
+    // Holds the clipping planes of the Clipping panel. It sits immediately before
+    // objectGroup, so the planes clip the model but leave the editing root, the
+    // dimensions and the on-top selection alone.
+    SoGroup* clipGroup;
     // Child group in the scene graph that contains view providers related to the physical object
     SoGroup* objectGroup;
 
