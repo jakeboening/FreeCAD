@@ -83,10 +83,17 @@ public:
     /**
      * Draws the caps for every enabled plane whose cap is switched on.
      *
-     * Must be called with the view's context current and the main scene already
+     * Must be called with the view's context current and the model already
      * drawn, so that the depth buffer is complete - but before anything clears
      * the depth buffer again. It is a no-op when nothing wants a cap or the
-     * context has no stencil buffer.
+     * framebuffer that is bound has no stencil buffer.
+     *
+     * It runs a render action of its own, and is called from SoFCClippingCap
+     * while the outer traversal is still in flight. Every scrap of OpenGL state
+     * it touches is saved and restored, including the projection and modelview
+     * matrices, so the traversal can carry on afterwards - but Coin's own idea
+     * of what it last sent to OpenGL is beyond our reach, so the caller is
+     * responsible for the SoGLLazyElement reset. See SoFCClippingCap::GLRender.
      */
     void render(const ClippingState& state);
 

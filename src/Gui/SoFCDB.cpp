@@ -79,6 +79,7 @@
 #include "Inventor/SoDrawingGrid.h"
 #include "Inventor/SoFCScreenSpaceGroup.h"
 #include "Inventor/SoFCBackgroundGradient.h"
+#include "Inventor/SoFCClippingCap.h"
 #include "Inventor/SoFCBoundingBox.h"
 #include "Inventor/SoNaviCube.h"
 #include "Inventor/SoMouseWheelEvent.h"
@@ -112,6 +113,7 @@ void Gui::SoFCDB::init()
     SoFCColorBar ::initClass();
     SoFCScreenSpaceGroup ::initClass();
     SoFCBackgroundGradient ::initClass();
+    SoFCClippingCap ::initClass();
     SoFCBoundingBox ::initClass();
     SoFCSelection ::initClass();
     SoFCUnifiedSelection ::initClass();
@@ -248,6 +250,7 @@ void Gui::SoFCDB::finish()
     // to invoke the private member function 'atexit_cleanup()'.
     SoFCColorBar ::finish();
     SoFCBackgroundGradient ::finish();
+    SoFCClippingCap ::finish();
     SoFCBoundingBox ::finish();
     SoFCSelection ::finish();
     SoFCPreselectionAction ::finish();

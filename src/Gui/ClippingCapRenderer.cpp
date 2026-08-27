@@ -224,13 +224,6 @@ SbVec3f orthogonalTo(const SbVec3f& normal)
 }
 
 /**
- * Does the plane pass through this box?
- *
- * The signed distance of the box centre against the box's own extent projected
- * onto the normal - the standard box/plane separation test. False means the box
- * is wholly kept or wholly clipped, and either way it can contribute no cap.
- */
-/**
  * Stencil bits of the framebuffer currently bound for drawing.
  *
  * GL_STENCIL_BITS answers for the draw framebuffer on a compatibility profile,
@@ -645,6 +638,11 @@ void setQuadGeometry(
  * finishes with an alpha clear that depends on the colour mask, and
  * renderToFramebuffer deliberately runs at GL_LESS where a fresh render action
  * would leave GL_LEQUAL. So the restore has to be exhaustive, not approximate.
+ *
+ * Since the caps moved into the scene traversal the bar is higher again: the
+ * outer traversal does not stop when we run, it carries on with our siblings and
+ * then with Coin's deferred annotation pass. Anything we leave behind is
+ * inherited by geometry that has nothing to do with clipping.
  */
 class ScopedCapGLState
 {
@@ -690,6 +688,21 @@ public:
         glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &polygonOffsetFactor);
         glGetFloatv(GL_POLYGON_OFFSET_UNITS, &polygonOffsetUnits);
 
+        glGetIntegerv(GL_MATRIX_MODE, &matrixMode);
+        glGetIntegerv(GL_VIEWPORT, viewportBox.data());
+
+        // The nested action traverses a camera node, which loads its own
+        // projection and viewing matrices straight into GL. The outer traversal
+        // resumes afterwards and its SoModelMatrixElement and friends still
+        // believe GL holds what they last sent, so they will not re-issue them:
+        // the matrices have to come back byte for byte. They do happen to come out
+        // the same today - it is the same camera and the same viewport - but that
+        // is a coincidence of the current wiring, not something to rely on.
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+
         // Baseline. Culling off is the belt to the SoShapeHints override's braces:
         // back faces that never rasterise never get counted, and the count is the
         // whole algorithm. The blend setup is needed because transparency type
@@ -727,6 +740,20 @@ public:
 
     ~ScopedCapGLState() noexcept
     {
+        // Matrices first: everything below is independent of the matrix mode, and
+        // this leaves the stacks balanced even if a later call were to fail.
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(static_cast<GLenum>(matrixMode));
+        glViewport(
+            viewportBox[0],
+            viewportBox[1],
+            static_cast<GLsizei>(viewportBox[2]),
+            static_cast<GLsizei>(viewportBox[3])
+        );
+
         gl->glStencilFuncSeparate(
             GL_FRONT,
             static_cast<GLenum>(stencilFunc),
@@ -831,6 +858,9 @@ private:
     GLint frontFace {GL_CCW};
     GLfloat polygonOffsetFactor {0.0F};
     GLfloat polygonOffsetUnits {0.0F};
+
+    GLint matrixMode {GL_MODELVIEW};
+    std::array<GLint, 4> viewportBox {};
 };
 
 }  // namespace

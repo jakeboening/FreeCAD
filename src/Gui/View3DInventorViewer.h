@@ -111,6 +111,7 @@ class SoShapeScale;
 class ViewerEventFilter;
 class ViewClipping;
 class ClippingCapRenderer;
+class SoFCClippingCap;
 
 /** GUI view into a 3D scene provided by View3DInventor
  *
@@ -326,6 +327,13 @@ public:
      * the panel says so instead of showing controls that do nothing.
      */
     int stencilBits() const;
+    /** Fills the cross-sections the clipping planes expose.
+     *
+     * Called from the SoFCClippingCap node during the scene traversal, once the
+     * model is drawn and before Coin's delayed annotation pass. No-op unless a
+     * plane actually asks for a cap.
+     */
+    void renderClippingCaps();
     /// Group holding the view providers of the physical objects.
     SoGroup* getObjectGroup() const;
     void setupEditingRoot(SoNode* node = nullptr, const Base::Matrix4D* mat = nullptr);
@@ -715,6 +723,8 @@ private:
     // separator is the point: it stops the planes reaching anything added to
     // pcViewProviderRoot afterwards, such as measurements.
     SoSeparator* clippedContent;
+    // Sits right after clippedContent: after the model, and outside the planes.
+    SoFCClippingCap* capNode;
     // Holds the clipping planes of the Clipping panel. It sits immediately before
     // objectGroup inside clippedContent, so the planes clip the model and nothing
     // else.
@@ -724,8 +734,6 @@ private:
     std::unique_ptr<ClippingCapRenderer> capRenderer;
     /// Fills stencilBitCount on the first frame; needs a current context.
     void probeStencilBits() const;
-    /// Fills the cross-sections the clipping planes expose. No-op unless one asks for it.
-    void renderClippingCaps();
     // Child group in the scene graph that contains view providers related to the physical object
     SoGroup* objectGroup;
 

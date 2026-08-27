@@ -128,6 +128,7 @@
 #include "View3DInventorViewer.h"
 #include "ViewClipping.h"
 #include "ClippingCapRenderer.h"
+#include "Inventor/SoFCClippingCap.h"
 #include "Application.h"
 #include "Camera.h"
 #include "Command.h"
@@ -996,6 +997,7 @@ View3DInventorViewer::View3DInventorViewer(QWidget* parent, const QOpenGLWidget*
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
     , clippedContent(nullptr)
+    , capNode(nullptr)
     , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
@@ -1022,6 +1024,7 @@ View3DInventorViewer::View3DInventorViewer(
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
     , clippedContent(nullptr)
+    , capNode(nullptr)
     , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
@@ -1264,6 +1267,18 @@ void View3DInventorViewer::init()
     objectGroup->setName("ObjectGroup");
     clippedContent->addChild(objectGroup);
 
+    // After the model rather than inside it, so the depth buffer is already
+    // complete; and outside clippedContent, because within that separator the
+    // traversal still has the clipping planes enabled in OpenGL and they would
+    // clip away the very quad the cap is drawn from. Being in the graph at all
+    // is what puts the caps ahead of Coin's delayed annotations instead of on
+    // top of them.
+    capNode = new SoFCClippingCap();
+    capNode->ref();
+    capNode->setName("ClippingCap");
+    capNode->setViewer(this);
+    pcViewProviderRoot->addChild(capNode);
+
     // Set our own render action which show a bounding box if
     // the SoFCSelection::BOX style is set
     //
@@ -1407,6 +1422,8 @@ View3DInventorViewer::~View3DInventorViewer()
     this->clipGroup = nullptr;
     this->clippedContent->unref();
     this->clippedContent = nullptr;
+    this->capNode->unref();
+    this->capNode = nullptr;
     this->backlight->unref();
     this->backlight = nullptr;
     this->fillLight->unref();
@@ -3307,7 +3324,6 @@ bool View3DInventorViewer::renderToFramebuffer(QOpenGLFramebufferObject* fbo, bo
         SoNode* scene = this->getSceneGraph();
         gl.apply(scene == this->viewerSceneRoot ? this->selectionRoot : scene);
     }
-    renderClippingCaps();
     renderDelayedAnnotations(&gl);
     gl.apply(this->foregroundroot);
     if (shouldRenderDecorations(currentRenderIntent())) {
@@ -3479,7 +3495,6 @@ void View3DInventorViewer::renderGLActionScene(const QColor& backgroundColor, So
     try {
         // Render normal scenegraph.
         inherited::actualRedraw();
-        renderClippingCaps();
         renderDelayedAnnotations(glra);
     }
     catch (const Base::MemoryException&) {
