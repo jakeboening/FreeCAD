@@ -53,6 +53,11 @@ public:
     int exec(bool atCursor = true);
     bool isSuccess();
 
+protected:
+    /// Middle click over the datum dialog accepts it.  The value field is left
+    /// alone, where the middle button still pastes the primary selection.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     Sketcher::SketchObject* sketch;
     Sketcher::Constraint* Constr;
