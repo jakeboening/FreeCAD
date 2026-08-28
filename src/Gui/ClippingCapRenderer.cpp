@@ -367,12 +367,13 @@ bool projectBox(
     const auto width = static_cast<float>(size[0]);
     const auto height = static_cast<float>(size[1]);
 
-    // One pixel of slack each way: the box is a bound on the geometry, not on the
-    // pixels its edges touch once rasterised.
-    auto left = static_cast<GLint>(std::floor((minX * 0.5F + 0.5F) * width)) - 1;
-    auto bottom = static_cast<GLint>(std::floor((minY * 0.5F + 0.5F) * height)) - 1;
-    auto right = static_cast<GLint>(std::ceil((maxX * 0.5F + 0.5F) * width)) + 1;
-    auto top = static_cast<GLint>(std::ceil((maxY * 0.5F + 0.5F) * height)) + 1;
+    // Two pixels of slack each way: the box bounds the geometry, not the pixels
+    // its edges touch once rasterised, and a scissor even one pixel inside the
+    // cap shows up as a hard straight edge across the section.
+    auto left = static_cast<GLint>(std::floor((minX * 0.5F + 0.5F) * width)) - 2;
+    auto bottom = static_cast<GLint>(std::floor((minY * 0.5F + 0.5F) * height)) - 2;
+    auto right = static_cast<GLint>(std::ceil((maxX * 0.5F + 0.5F) * width)) + 2;
+    auto top = static_cast<GLint>(std::ceil((maxY * 0.5F + 0.5F) * height)) + 2;
 
     left = std::clamp(left, GLint {0}, static_cast<GLint>(size[0]));
     bottom = std::clamp(bottom, GLint {0}, static_cast<GLint>(size[1]));
@@ -1230,11 +1231,19 @@ void ClippingCapRenderer::render(const ClippingState& state)
             ->GetInt("ClipCapMaxPasses", defaultMaxCapPasses)
     );
 
-    SbViewportRegion cameraViewport;
-    const SbViewVolume viewVolume = camera->getViewVolume(viewport, cameraViewport);
+    // The aspect ratio has to be handed over explicitly. Both getViewVolume()
+    // overloads fall back to SoCamera::aspectRatio, and nothing keeps that field
+    // in sync with the viewport for the scene camera - it stays at its default of
+    // 1.0 - so the projection came out square, with the half-width equal to the
+    // half-height instead of half-height times the aspect. That is a scale error
+    // about the centre of the screen: an object in the middle of the view still
+    // projected very nearly right, while one off to the side did not, so the
+    // scissor slid off the cap as the model was panned across the view and ate a
+    // wedge out of it. NavigationStyle passes the aspect for the same reason.
+    const SbViewVolume viewVolume = camera->getViewVolume(viewport.getViewportAspectRatio());
     const SbMatrix viewProjection = viewVolume.getMatrix();
-    const SbVec2s screenOrigin = cameraViewport.getViewportOriginPixels();
-    const SbVec2s screenSize = cameraViewport.getViewportSizePixels();
+    const SbVec2s screenOrigin = viewport.getViewportOriginPixels();
+    const SbVec2s screenSize = viewport.getViewportSizePixels();
 
     SbVec3f sceneMin;
     SbVec3f sceneMax;
