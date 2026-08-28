@@ -35,6 +35,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QSpinBox>
@@ -656,6 +657,16 @@ void Clipping::syncFromState()
     d->ui.stencilWarning->setVisible(!d->capsSupported());
 
     d->updating = false;
+}
+
+void Clipping::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::MiddleButton) {
+        reject();
+        return;
+    }
+
+    QDialog::mousePressEvent(event);
 }
 
 void Clipping::reject()
