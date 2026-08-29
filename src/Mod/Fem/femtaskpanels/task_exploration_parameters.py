@@ -99,6 +99,40 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         row.addStretch(1)
         layout.addLayout(row)
 
+        # ------------------------------------------------------ objectives
+        layout.addWidget(QtGui.QLabel("<b>Objectives</b> (what an optimization drives)"))
+        self.objective_model = tablemodel.ObjectiveTableModel()
+        self.objective_view = tablemodel.make_view(self.objective_model)
+        self.objective_view.setMinimumHeight(70)
+        layout.addWidget(self.objective_view)
+        row = QtGui.QHBoxLayout()
+        add_obj = QtGui.QPushButton("Add objective")
+        add_obj.setToolTip("Drive an output down, up, or towards a target value")
+        add_obj.clicked.connect(self.add_objective)
+        row.addWidget(add_obj)
+        self.remove_obj_button = QtGui.QPushButton("Remove")
+        self.remove_obj_button.clicked.connect(self.remove_objective)
+        row.addWidget(self.remove_obj_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        # ----------------------------------------------------- constraints
+        layout.addWidget(QtGui.QLabel("<b>Constraints</b> (bounds a design must respect)"))
+        self.constraint_model = tablemodel.ConstraintTableModel()
+        self.constraint_view = tablemodel.make_view(self.constraint_model)
+        self.constraint_view.setMinimumHeight(70)
+        layout.addWidget(self.constraint_view)
+        row = QtGui.QHBoxLayout()
+        add_con = QtGui.QPushButton("Add constraint")
+        add_con.setToolTip("Bound an output; how far a design exceeds it is recorded, not just whether")
+        add_con.clicked.connect(self.add_constraint)
+        row.addWidget(add_con)
+        self.remove_con_button = QtGui.QPushButton("Remove")
+        self.remove_con_button.clicked.connect(self.remove_constraint)
+        row.addWidget(self.remove_con_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+
         self.hint = QtGui.QLabel()
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
@@ -109,10 +143,15 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
     # ------------------------------------------------------------------ view
 
     def refresh(self):
+        outputs = explorationutils.get_outputs(self.obj)
         self.input_model.setObjects(explorationutils.get_inputs(self.obj))
-        self.output_model.setObjects(explorationutils.get_outputs(self.obj))
-        self.input_view.resizeColumnsToContents()
-        self.output_view.resizeColumnsToContents()
+        self.output_model.setObjects(outputs)
+        self.objective_model.setOutputs(outputs)
+        self.objective_model.setObjects(explorationutils.get_objectives(self.obj))
+        self.constraint_model.setOutputs(outputs)
+        self.constraint_model.setObjects(explorationutils.get_constraints(self.obj))
+        for view in (self.input_view, self.output_view, self.objective_view, self.constraint_view):
+            view.resizeColumnsToContents()
         self.update_hint()
 
     def update_hint(self, *args):
@@ -217,6 +256,58 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
 
     def remove_output(self):
         obj = self._selected(self.output_view, self.output_model)
+        if obj is None:
+            return
+        doc = obj.Document
+        doc.removeObject(obj.Name)
+        doc.recompute()
+        self.refresh()
+
+    def _first_output(self):
+        outputs = explorationutils.get_outputs(self.obj)
+        return outputs[0] if outputs else None
+
+    def add_objective(self):
+        import ObjectsFem
+
+        if self._first_output() is None:
+            QtGui.QMessageBox.information(
+                self.form, "Add an output first", "An objective drives an output parameter; add one above."
+            )
+            return
+        doc = self.obj.Document
+        objective = ObjectsFem.makeExplorationObjective(doc)
+        objective.Output = self._first_output()
+        self.obj.addObject(objective)
+        doc.recompute()
+        self.refresh()
+
+    def remove_objective(self):
+        obj = self._selected(self.objective_view, self.objective_model)
+        if obj is None:
+            return
+        doc = obj.Document
+        doc.removeObject(obj.Name)
+        doc.recompute()
+        self.refresh()
+
+    def add_constraint(self):
+        import ObjectsFem
+
+        if self._first_output() is None:
+            QtGui.QMessageBox.information(
+                self.form, "Add an output first", "A constraint bounds an output parameter; add one above."
+            )
+            return
+        doc = self.obj.Document
+        constraint = ObjectsFem.makeExplorationConstraint(doc)
+        constraint.Output = self._first_output()
+        self.obj.addObject(constraint)
+        doc.recompute()
+        self.refresh()
+
+    def remove_constraint(self):
+        obj = self._selected(self.constraint_view, self.constraint_model)
         if obj is None:
             return
         doc = obj.Document

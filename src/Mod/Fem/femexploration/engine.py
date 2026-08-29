@@ -134,6 +134,7 @@ def run_study(spec, store, backend, planner, progress=None, cancel=None):
 
     cached = store.results_by_id() if spec.resume_from_cache else {}
     results = []
+    produced = {}   # point id -> result, for everything this run has seen
     failures = 0
     leading_failures = 0
     aborted_reason = ""
@@ -172,13 +173,25 @@ def run_study(spec, store, backend, planner, progress=None, cancel=None):
                 break
 
             pending = []
+            issued = set()
             for vector in batch:
                 if not vector.point_id:
                     vector.point_id = backend.point_id(vector.values)
+                if vector.point_id in issued:
+                    # a population method can propose the same point twice
+                    # (two trials clipped to one corner); solve it once
+                    continue
+                issued.add(vector.point_id)
+                if vector.point_id in produced:
+                    # proposed again later in the same run; the planner
+                    # already has this result and the table needs no twin
+                    report(f"reused {vector.point_id}", point=_summarise(produced[vector.point_id], reused=True))
+                    continue
                 hit = cached.get(vector.point_id)
                 if hit is not None and hit.state == COMPLETED:
                     # already computed against this exact model; reuse it
                     results.append(hit)
+                    produced[vector.point_id] = hit
                     report(f"reused {vector.point_id}", point=_summarise(hit, reused=True))
                     continue
                 pending.append(vector)
@@ -194,6 +207,7 @@ def run_study(spec, store, backend, planner, progress=None, cancel=None):
                 for result in backend.poll(timeout=0.1):
                     store.write_point(result)
                     results.append(result)
+                    produced[result.point_id] = result
 
                     if result.state == CANCELLED:
                         continue

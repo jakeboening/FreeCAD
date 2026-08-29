@@ -269,6 +269,83 @@ class OutputTableModel(_ObjectTableModel):
         return super()._display(obj, column)
 
 
+LINK = "link"
+
+
+class _LinkedTableModel(_ObjectTableModel):
+    """Rows that point at an output parameter through a link column."""
+
+    def __init__(self, objects=None, outputs=None, parent=None):
+        super().__init__(objects, parent)
+        self._outputs = list(outputs or [])
+
+    def setOutputs(self, outputs):
+        self._outputs = list(outputs)
+        self.layoutChanged.emit()
+
+    def output_labels(self):
+        return [o.Label for o in self._outputs]
+
+    def _display(self, obj, column):
+        if column.kind == LINK:
+            target = getattr(obj, column.attr)
+            return target.Label if target is not None else "(choose an output)"
+        return super()._display(obj, column)
+
+    def setData(self, index, value, role=QtCore.Qt.EditRole):
+        if not index.isValid():
+            return False
+        column = self.columns[index.column()]
+        if column.kind == LINK and role == QtCore.Qt.EditRole:
+            obj = self._objects[index.row()]
+            for output in self._outputs:
+                if output.Label == str(value) or output.Name == str(value):
+                    setattr(obj, column.attr, output)
+                    obj.Document.recompute()
+                    self.dataChanged.emit(index, index)
+                    return True
+            return False
+        return super().setData(index, value, role)
+
+
+class ObjectiveTableModel(_LinkedTableModel):
+    """Objectives: what to drive, which way."""
+
+    columns = [
+        _Column("Name", "Label", TEXT, "Name shown in the tree"),
+        _Column("Output", "Output", LINK, "Output parameter this objective drives"),
+        _Column("Direction", "Direction", ENUM, "Minimize, Maximize, or reach the target",
+                list(model.DIRECTIONS)),
+        _Column("Target", "TargetValue", FLOAT, "Value to reach when Direction is Target"),
+        _Column("Weight", "Weight", FLOAT, "Relative weight when objectives are combined"),
+        _Column("Active", "Active", BOOL, "Optimize this objective"),
+    ]
+
+    def _editable(self, obj, column):
+        if column.header == "Target":
+            return obj.Direction == model.TARGET
+        return column.kind != READONLY
+
+    def _display(self, obj, column):
+        if column.header == "Target" and obj.Direction != model.TARGET:
+            return ""
+        return super()._display(obj, column)
+
+
+class ConstraintTableModel(_LinkedTableModel):
+    """Constraints: a bound on a response."""
+
+    columns = [
+        _Column("Name", "Label", TEXT, "Name shown in the tree"),
+        _Column("Output", "Output", LINK, "Output parameter this constraint bounds"),
+        _Column("Operator", "Operator", ENUM, "How the output relates to the limit",
+                list(model.OPERATORS)),
+        _Column("Limit", "Limit", FLOAT, "Bound, in the output's unit"),
+        _Column("Tolerance", "Tolerance", FLOAT, "Slack allowed before it counts as violated"),
+        _Column("Active", "Active", BOOL, "Enforce this constraint"),
+    ]
+
+
 class EnumDelegate(QtGui.QStyledItemDelegate):
     """Combo box editor for the enumeration columns."""
 
@@ -278,6 +355,10 @@ class EnumDelegate(QtGui.QStyledItemDelegate):
 
     def createEditor(self, parent, option, index):
         column = self._model.columns[index.column()]
+        if column.kind == LINK and hasattr(self._model, "output_labels"):
+            combo = QtGui.QComboBox(parent)
+            combo.addItems(self._model.output_labels())
+            return combo
         if column.kind != ENUM:
             return super().createEditor(parent, option, index)
         combo = QtGui.QComboBox(parent)

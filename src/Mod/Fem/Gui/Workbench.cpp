@@ -184,10 +184,13 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
                  << "Separator"
                  << "FEM_ExplorationSweep"
                  << "FEM_ExplorationDOE"
+                 << "FEM_ExplorationOptimization"
                  << "FEM_ExplorationRun"
                  << "Separator"
                  << "FEM_ExplorationCorrelation"
-                 << "FEM_ExplorationSensitivity";
+                 << "FEM_ExplorationSensitivity"
+                 << "FEM_ExplorationHistory"
+                 << "FEM_ExplorationPareto";
 
     Gui::ToolBarItem* results = new Gui::ToolBarItem(root);
     results->setCommand("Results");
@@ -349,10 +352,13 @@ Gui::MenuItem* Workbench::setupMenuBar() const
                  << "Separator"
                  << "FEM_ExplorationSweep"
                  << "FEM_ExplorationDOE"
+                 << "FEM_ExplorationOptimization"
                  << "FEM_ExplorationRun"
                  << "Separator"
                  << "FEM_ExplorationCorrelation"
-                 << "FEM_ExplorationSensitivity";
+                 << "FEM_ExplorationSensitivity"
+                 << "FEM_ExplorationHistory"
+                 << "FEM_ExplorationPareto";
 
     Gui::MenuItem* results = new Gui::MenuItem;
     root->insertItem(item, results);

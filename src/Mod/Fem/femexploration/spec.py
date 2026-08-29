@@ -211,6 +211,15 @@ def _method(study):
         method["point_count"] = int(study.PointCount)
     if hasattr(study, "Alpha"):
         method["alpha"] = str(study.Alpha)
+    if hasattr(study, "Algorithm"):
+        method["algorithm"] = str(study.Algorithm)
+        method["max_evaluations"] = int(study.MaxEvaluations)
+        method["population"] = int(study.PopulationSize)
+        method["tolerance"] = float(study.Tolerance)
+        method["stagnation"] = int(study.Stagnation)
+        method["wall_clock"] = float(study.WallClock)
+        method["constraints"] = str(study.ConstraintHandling)
+        method["penalty"] = float(study.PenaltyFactor)
     return method
 
 

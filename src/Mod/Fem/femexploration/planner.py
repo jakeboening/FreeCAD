@@ -158,9 +158,14 @@ def make_planner(spec, points=None):
         )
         return StaticPlanner(plan, implementation)
 
+    if spec.study_type == "Optimization":
+        from .algorithms.optimize import make_optimizer
+
+        return make_optimizer(spec)
+
     raise ValueError(
         f"no planner for study type {spec.study_type!r}; "
-        "optimization and response surface studies arrive in a later release"
+        "response surface studies arrive in a later release"
     )
 
 

@@ -563,6 +563,24 @@ class DesignPointFilter(QtCore.QSortFilterProxyModel):
         return str(source.data(left) or "") < str(source.data(right) or "")
 
 
+import weakref
+
+#: every live table, so a chart can point at a row in it
+_views = weakref.WeakSet()
+
+
+def select_point(point_id):
+    """Select *point_id* in every open table; returns how many showed it."""
+    shown = 0
+    for view in list(_views):
+        try:
+            if view.select_point(point_id):
+                shown += 1
+        except RuntimeError:
+            continue  # the widget is gone
+    return shown
+
+
 class DesignPointView(QtGui.QWidget):
     """The table plus its toolbar.
 
@@ -635,6 +653,7 @@ class DesignPointView(QtGui.QWidget):
         actions.addStretch(1)
         layout.addLayout(actions)
 
+        _views.add(self)
         self.model.modelReset.connect(self._refresh_summary)
         self.model.rowsInserted.connect(self._refresh_summary)
         self.model.rowsRemoved.connect(self._refresh_summary)
@@ -660,6 +679,18 @@ class DesignPointView(QtGui.QWidget):
         self.table.resizeColumnsToContents()
         self.table.scrollToBottom()
         return r
+
+    def select_point(self, point_id):
+        """Select and scroll to the row of *point_id*; False if not shown."""
+        r = self.model.find(point_id)
+        if r is None:
+            return False
+        index = self.proxy.mapFromSource(self.model.index(r, 0))
+        if not index.isValid():
+            return False
+        self.table.selectRow(index.row())
+        self.table.scrollTo(index)
+        return True
 
     def selected_rows(self):
         """Source row indices of the selection, in table order."""

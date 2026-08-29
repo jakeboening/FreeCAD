@@ -199,6 +199,136 @@ def draw_sensitivity(figure, data, outputs=None, max_outputs=4):
     return axes_list
 
 
+def _merit_rows(data):
+    """(index, merit, feasible) per completed row, in journal order."""
+    out = []
+    for i, row in enumerate(data.rows):
+        if row.get("state") != expl_model.COMPLETED or not row.get("objectives"):
+            continue
+        objectives = row["objectives"]
+        keys = data.objectives or sorted(objectives)
+        try:
+            merit = sum(float(objectives[k]) for k in keys if k in objectives)
+        except (TypeError, ValueError):
+            continue
+        feasible = all(float(v or 0.0) <= 0.0 for v in row.get("violations", {}).values())
+        out.append((i, merit, feasible))
+    return out
+
+
+def draw_history(figure, data, window=10):
+    """Best feasible objective so far against evaluation order.
+
+    Plus the fraction of infeasible designs over a moving window, so a run
+    that is spending its budget outside the feasible region says so.
+    """
+    rows = _merit_rows(data)
+    if len(rows) < 2:
+        raise ValueError("a history chart needs at least two completed design points with objectives")
+    figure.clear()
+    axes = figure.add_subplot(211)
+    best = []
+    current = None
+    for _i, merit, feasible in rows:
+        if feasible and (current is None or merit < current):
+            current = merit
+        best.append(current)
+    xs = list(range(1, len(rows) + 1))
+    axes.plot(xs, [b if b is not None else float("nan") for b in best], drawstyle="steps-post", color="#2c5aa0")
+    axes.scatter(xs, [m for _i, m, _f in rows], s=10, c=["#5aa02c" if f else "#c0392b" for _i, _m, f in rows])
+    label = " + ".join(data.label(k) for k in data.objectives) if data.objectives else "objective"
+    axes.set_ylabel(label)
+    axes.set_title(f"{data.title}: best so far over {len(rows)} evaluations")
+
+    below = figure.add_subplot(212, sharex=axes)
+    rate = []
+    for i in range(len(rows)):
+        chunk = rows[max(0, i - window + 1) : i + 1]
+        rate.append(100.0 * sum(1 for _i, _m, f in chunk if not f) / len(chunk))
+    below.plot(xs, rate, color="#c0392b")
+    below.set_ylim(0, 100)
+    below.set_ylabel(f"% infeasible (last {window})")
+    below.set_xlabel("evaluation")
+    figure.tight_layout()
+    return [axes, below]
+
+
+def draw_pareto(figure, data, objectives=None, on_pick=None):
+    """Two objectives against each other, the front highlighted.
+
+    Every point is pickable: clicking one calls ``on_pick(point_id)``, which
+    the command wires to the design point table so a promising design can
+    be selected, opened or applied.  A Pareto plot that cannot be clicked
+    is decoration.
+    """
+    from femexploration.algorithms import moo
+
+    keys = list(objectives or data.objectives)
+    if len(keys) < 2:
+        raise ValueError("a Pareto chart needs two objectives; use the history chart for one")
+    keys = keys[:2]
+    points = []
+    for row in data.rows:
+        if row.get("state") != expl_model.COMPLETED:
+            continue
+        objectives_ = row.get("objectives", {})
+        if not all(k in objectives_ for k in keys):
+            continue
+        violation = sum(float(v or 0.0) for v in row.get("violations", {}).values() if float(v or 0.0) > 0)
+        points.append((row.get("point_id", ""), [float(objectives_[k]) for k in keys], violation))
+    if len(points) < 2:
+        raise ValueError("a Pareto chart needs at least two completed design points with both objectives")
+    front = set(moo.pareto_front([(f, v) for _pid, f, v in points]))
+
+    figure.clear()
+    axes = figure.add_subplot(111)
+    xs = [f[0] for _p, f, _v in points]
+    ys = [f[1] for _p, f, _v in points]
+    colours = ["#2c5aa0" if i in front else ("#c0392b" if v > 0 else "#9e9e9e") for i, (_p, _f, v) in enumerate(points)]
+    sizes = [40 if i in front else 18 for i in range(len(points))]
+    scatter = axes.scatter(xs, ys, c=colours, s=sizes, picker=5)
+    ordered = sorted((points[i][1] for i in front), key=lambda f: f[0])
+    if len(ordered) > 1:
+        axes.plot([f[0] for f in ordered], [f[1] for f in ordered], color="#2c5aa0", linewidth=1)
+    axes.set_xlabel(data.label(keys[0]))
+    axes.set_ylabel(data.label(keys[1]))
+    axes.set_title(f"{data.title}: {len(front)} non-dominated of {len(points)} designs (click a point to select it)")
+
+    ids = [pid for pid, _f, _v in points]
+    if on_pick is not None:
+        def _picked(event):
+            if event.artist is scatter and len(event.ind):
+                on_pick(ids[int(event.ind[0])])
+
+        figure.canvas.mpl_connect("pick_event", _picked)
+    axes.pareto_ids = ids
+    figure.tight_layout()
+    return axes
+
+
+def select_design_point(point_id):
+    """Select *point_id* in every open design point table, and in the tree."""
+    from . import exploration_designpoints as dp
+
+    dp.select_point(point_id)
+
+
+register_chart(
+    "History",
+    "Optimization History",
+    "Best objective so far and the infeasible rate, in evaluation order",
+    "FEM_ExplorationHistory",
+    draw_history,
+    needs=("input", "objective"),
+)
+register_chart(
+    "Pareto",
+    "Pareto Front",
+    "Two objectives against each other, non-dominated designs highlighted; click a point to select it",
+    "FEM_ExplorationPareto",
+    draw_pareto,
+    needs=("input", "objective"),
+)
 register_chart(
     "Correlation",
     "Correlation Matrix",
@@ -274,7 +404,10 @@ def show_chart(name, study=None):
     table = find_table(study)
     data = chart_data_from_table(table)
     window = plot_window(f"{info.title} - {data.title}")
-    info.draw(window.fig, data)
+    if name == "Pareto":
+        info.draw(window.fig, data, on_pick=select_design_point)
+    else:
+        info.draw(window.fig, data)
     window.canvas.draw()
     window.show()
     _windows.append(window)

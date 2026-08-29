@@ -419,6 +419,48 @@ def makeExplorationDOE(doc, name="DOE"):
     return obj
 
 
+def makeExplorationObjective(doc, name="Objective"):
+    """makeExplorationObjective(document, [name]):
+    creates a design exploration objective"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_objective
+
+    exploration_objective.ExplorationObjective(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_objective
+
+        view_exploration_objective.VPExplorationObjective(obj.ViewObject)
+    return obj
+
+
+def makeExplorationConstraint(doc, name="Constraint"):
+    """makeExplorationConstraint(document, [name]):
+    creates a design exploration constraint"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_constraint
+
+    exploration_constraint.ExplorationConstraint(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_constraint
+
+        view_exploration_constraint.VPExplorationConstraint(obj.ViewObject)
+    return obj
+
+
+def makeExplorationOptimization(doc, name="Optimization"):
+    """makeExplorationOptimization(document, [name]):
+    creates a design exploration optimization study"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_optimization
+
+    exploration_optimization.ExplorationOptimization(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_optimization
+
+        view_exploration_optimization.VPExplorationOptimization(obj.ViewObject)
+    return obj
+
+
 def makeExplorationDesignPoints(doc, name="DesignPoints"):
     """makeExplorationDesignPoints(document, [name]):
     creates the design point table of a study"""

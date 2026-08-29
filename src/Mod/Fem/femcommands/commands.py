@@ -1463,6 +1463,52 @@ class _ExplorationDOE(CommandManager):
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
 
 
+class _ExplorationOptimization(CommandManager):
+    "The FEM_ExplorationOptimization command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationOptimization", "Optimization")
+        self.accel = "D, O"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationOptimization",
+            "Creates an optimization driving the analysis' objectives within its constraints",
+        )
+        self.is_active = "with_analysis"
+
+    def Activated(self):
+        import FemGui
+
+        from femtools import explorationutils
+
+        analysis = FemGui.getActiveAnalysis()
+        param_set = explorationutils.get_parameter_set(analysis)
+        if param_set is None or not explorationutils.get_inputs(param_set):
+            FreeCAD.Console.PrintError(
+                "Add at least one design variable before creating an optimization. "
+                "Select an object and use Add Design Variable.\n"
+            )
+            return
+        if not explorationutils.get_objectives(param_set):
+            FreeCAD.Console.PrintWarning(
+                "The parameter set has no objective yet; add one in the Parameter Set "
+                "panel before running the optimization.\n"
+            )
+
+        FreeCAD.ActiveDocument.openTransaction("Create Fem ExplorationOptimization")
+        FreeCADGui.addModule("ObjectsFem")
+        FreeCADGui.addModule("FemGui")
+        FreeCADGui.doCommand(
+            "obj = ObjectsFem.makeExplorationOptimization(FreeCAD.ActiveDocument)"
+        )
+        FreeCADGui.doCommand(
+            f"obj.ParameterSet = FreeCAD.ActiveDocument.getObject('{param_set.Name}')"
+        )
+        FreeCADGui.doCommand("FemGui.getActiveAnalysis().addObject(obj)")
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
+
+
 class _ExplorationChart(CommandManager):
     """A chart over the selected study's design points."""
 
@@ -1728,6 +1774,9 @@ FreeCADGui.addCommand("FEM_ExplorationParameters", _ExplorationParameters())
 FreeCADGui.addCommand("FEM_ExplorationPromoteParameter", _ExplorationPromoteParameter())
 FreeCADGui.addCommand("FEM_ExplorationSweep", _ExplorationSweep())
 FreeCADGui.addCommand("FEM_ExplorationDOE", _ExplorationDOE())
+FreeCADGui.addCommand("FEM_ExplorationOptimization", _ExplorationOptimization())
+FreeCADGui.addCommand("FEM_ExplorationHistory", _ExplorationChart("History"))
+FreeCADGui.addCommand("FEM_ExplorationPareto", _ExplorationChart("Pareto"))
 FreeCADGui.addCommand("FEM_ExplorationRun", _ExplorationRun())
 FreeCADGui.addCommand("FEM_ExplorationCorrelation", _ExplorationChart("Correlation"))
 FreeCADGui.addCommand("FEM_ExplorationSensitivity", _ExplorationChart("Sensitivity"))

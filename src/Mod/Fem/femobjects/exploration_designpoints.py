@@ -215,14 +215,22 @@ class ExplorationDesignPoints(base_fempythonobject.BaseFemPythonObject):
             STATE_CODES.index(r.state) if r.state in STATE_CODES else -1 for r in results
         ]
         if spec is not None:
-            items = list(spec.active_variables) + list(spec.responses)
+            items = (
+                list(spec.active_variables)
+                + list(spec.responses)
+                + list(spec.active_objectives)
+                + list(spec.active_constraints)
+            )
             # headings read as the user named them; the machine identity stays
             # the object name, which is what the stored rows are keyed by
             obj.ColumnNames = [getattr(i, "label", "") or i.name for i in items]
             obj.ColumnUnits = [getattr(i, "unit", "") for i in items]
-            obj.ColumnRoles = ["input"] * len(spec.active_variables) + [
-                "response"
-            ] * len(spec.responses)
+            obj.ColumnRoles = (
+                ["input"] * len(spec.active_variables)
+                + ["response"] * len(spec.responses)
+                + ["objective"] * len(spec.active_objectives)
+                + ["violation"] * len(spec.active_constraints)
+            )
             obj.ColumnKeys = [i.name for i in items]
 
         self._rows = None

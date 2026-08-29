@@ -38,8 +38,10 @@ __author__ = "FreeCAD Project Association"
 __url__ = "https://www.freecad.org"
 
 import json
+import math
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -753,6 +755,48 @@ class TestExplorationEngine(unittest.TestCase):
         self.assertEqual(len(result.completed), 9)
         self.assertTrue(all(r.outputs.get("Mass") for r in result.completed))
 
+    def test_a_point_proposed_again_later_in_the_run_is_not_solved_twice(self):
+        from femexploration import api
+        from femexploration import engine
+        from femexploration import planner as planner_module
+        from femexploration.backends.serial import SerialBackend
+        from femexploration.cancel import CancelToken
+        from femexploration.store import PointStore
+
+        spec = api.study_spec(self.sweep)
+        width = _variable_for(spec, "Width").name
+
+        class TwoBatches(planner_module.StaticPlanner):
+            def __init__(self):
+                super().__init__([{width: 600.0}])
+                self._second = False
+
+            def next_batch(self):
+                if self._second:
+                    return []
+                self._second = True
+                return [planner_module.DesignVector(values={width: 600.0, **{v.name: v.nominal for v in spec.active_variables if v.name != width}})]
+
+        # fill the nominal for the first batch too
+        planner = TwoBatches()
+        for vector in planner._plan:
+            for v in spec.active_variables:
+                vector.values.setdefault(v.name, v.nominal)
+        store = PointStore(self.run_dir).prepare()
+        token = CancelToken(self.run_dir)
+        token.reset()
+        result = engine.run_study(spec, store, SerialBackend(self.doc, cancel=token), planner, cancel=token)
+        self.assertEqual(len(result.results), 1)
+        self.assertEqual(len(store.read_index()), 1)
+
+    def test_a_point_proposed_twice_in_one_batch_is_solved_once(self):
+        from femexploration import api
+
+        spec = api.study_spec(self.sweep)
+        width = _variable_for(spec, "Width").name
+        result = self._run(points=[{width: 700.0}, {width: 700.0}, {width: 800.0}])
+        self.assertEqual(len(result.results), 2)
+
     def test_explicit_points_run_only_those(self):
         """The table's Add and Update actions hand the engine a list."""
         from femexploration import api
@@ -1065,6 +1109,237 @@ class TestSampling(unittest.TestCase):
         self.assertIn("LatinHypercube", made.implementation)
 
 
+def _drive(planner, evaluate, limit=5000):
+    """Run a planner the way the engine does, evaluating with *evaluate*.
+
+    ``evaluate(values) -> (outputs dict)``; objectives and violations are
+    scored from the spec exactly as the evaluator would.
+    """
+    spec = planner.spec
+    results = []
+    counter = [0]
+    batch = planner.initial_batch()
+    while batch and counter[0] < limit:
+        for vector in batch:
+            counter[0] += 1
+            vector.point_id = f"p{counter[0]:05d}"
+            outputs = evaluate(vector.values)
+            result = PointResult(point_id=vector.point_id, inputs={k: [v, ""] for k, v in vector.values.items()})
+            if outputs is None:
+                result.state = model.SOLVE_FAILED
+            else:
+                result.state = model.COMPLETED
+                result.outputs = dict(outputs)
+                for objective in spec.active_objectives:
+                    result.objectives[objective.name] = objective.value(outputs)
+                for constraint in spec.active_constraints:
+                    result.violations[constraint.name] = constraint.violation(outputs)
+            results.append(result)
+        planner.observe(results)
+        batch = planner.next_batch()
+    return results
+
+
+def _opt_spec(k=2, objectives=None, constraints=None, method=None, seed=1):
+    spec = StudySpec(
+        name="Opt",
+        study_type="Optimization",
+        variables=[Variable(name=f"x{i}", lower=-5.0, upper=5.0, nominal=4.0) for i in range(k)],
+        responses=[Response(name="f", source=model.EXPRESSION, expression="f"),
+                   Response(name="g", source=model.EXPRESSION, expression="g"),
+                   Response(name="f2", source=model.EXPRESSION, expression="f2")],
+        objectives=objectives or [Objective(name="MinF", response="f")],
+        constraints=constraints or [],
+        method=method or {},
+        seed=seed,
+    )
+    return spec
+
+
+class TestOptimizers(unittest.TestCase):
+    """The optimizers on functions with known answers, no FreeCAD."""
+
+    @staticmethod
+    def _sphere(values):
+        x = [values[k] for k in sorted(values)]
+        return {"f": sum(v * v for v in x), "g": x[0], "f2": 0.0}
+
+    @staticmethod
+    def _rosenbrock(values):
+        x, y = values["x0"], values["x1"]
+        return {"f": (1 - x) ** 2 + 100 * (y - x * x) ** 2, "g": x, "f2": 0.0}
+
+    def _best(self, spec, results):
+        feasible = [r for r in results if r.feasible]
+        return min(feasible, key=lambda r: r.objectives["MinF"])
+
+    def test_nelder_mead_finds_the_sphere_minimum(self):
+        from femexploration.algorithms import optimize
+
+        spec = _opt_spec(method={"algorithm": "NelderMead", "max_evaluations": 300, "tolerance": 1e-8, "stagnation": 50})
+        planner = optimize.make_optimizer(spec)
+        results = _drive(planner, self._sphere)
+        best = self._best(spec, results)
+        self.assertLess(best.objectives["MinF"], 1e-3)
+        self.assertLessEqual(len(results), 300)
+        self.assertTrue(planner.finished_reason)
+
+    def test_nelder_mead_descends_rosenbrock(self):
+        from femexploration.algorithms import optimize
+
+        spec = _opt_spec(method={"algorithm": "NelderMead", "max_evaluations": 400, "tolerance": 1e-9, "stagnation": 60})
+        results = _drive(optimize.make_optimizer(spec), self._rosenbrock)
+        best = self._best(spec, results)
+        self.assertLess(best.objectives["MinF"], 0.5)
+
+    def test_differential_evolution_finds_the_sphere_minimum(self):
+        from femexploration.algorithms import optimize
+
+        spec = _opt_spec(k=3, method={"algorithm": "DifferentialEvolution", "max_evaluations": 600,
+                                      "population": 20, "tolerance": 1e-8, "stagnation": 30})
+        results = _drive(optimize.make_optimizer(spec), self._sphere)
+        best = self._best(spec, results)
+        self.assertLess(best.objectives["MinF"], 1e-2)
+        # never past the budget: the last generation is cut to fit
+        self.assertLessEqual(len(results), 600)
+
+    def test_the_budget_is_a_hard_limit(self):
+        from femexploration.algorithms import optimize
+
+        for algorithm in ("DifferentialEvolution", "NSGA2"):
+            spec = _opt_spec(method={"algorithm": algorithm, "max_evaluations": 30, "population": 8, "stagnation": 0})
+            results = _drive(optimize.make_optimizer(spec), self._sphere)
+            self.assertLessEqual(len(results), 30, algorithm)
+            self.assertGreaterEqual(len(results), 24, algorithm)
+
+    def test_screening_is_a_batch_and_one_step(self):
+        from femexploration.algorithms import optimize
+
+        spec = _opt_spec(method={"algorithm": "Screening", "population": 12, "max_evaluations": 50})
+        planner = optimize.make_optimizer(spec)
+        results = _drive(planner, self._sphere)
+        self.assertEqual(len(results), 1 + 12 + 2)
+        self.assertIn("complete", planner.finished_reason)
+
+    def test_constraints_are_respected(self):
+        """Minimise x0^2 + x1^2 subject to x0 >= 2: the answer is (2, 0)."""
+        from femexploration.algorithms import optimize
+
+        for handling in ("FeasibilityRules", "Penalty", "DeathPenalty"):
+            spec = _opt_spec(
+                constraints=[Constraint(name="Lo", response="g", operator=model.GE, limit=2.0)],
+                method={"algorithm": "DifferentialEvolution", "population": 16, "max_evaluations": 480,
+                        "constraints": handling, "tolerance": 1e-9, "stagnation": 40},
+            )
+            results = _drive(optimize.make_optimizer(spec), self._sphere)
+            best = self._best(spec, results)
+            self.assertGreaterEqual(best.inputs["x0"][0], 2.0 - 1e-9, handling)
+            self.assertLess(best.objectives["MinF"], 4.3, handling)
+
+    def test_failed_points_rank_last_but_do_not_stop_the_search(self):
+        from femexploration.algorithms import optimize
+
+        def flaky(values):
+            if values["x0"] > 3.0:
+                return None  # a region where the mesh will not build
+            return self._sphere(values)
+
+        spec = _opt_spec(method={"algorithm": "DifferentialEvolution", "population": 12, "max_evaluations": 240})
+        results = _drive(optimize.make_optimizer(spec), flaky)
+        self.assertTrue(any(r.state == model.SOLVE_FAILED for r in results))
+        best = self._best(spec, results)
+        self.assertLess(best.objectives["MinF"], 0.1)
+
+    def test_stopping_reasons(self):
+        from femexploration.algorithms.optimize import Stopping
+
+        stop = Stopping(max_evaluations=10, tolerance=1e-3, stagnation=3)
+        self.assertFalse(stop.should_stop(5))
+        self.assertTrue(stop.should_stop(10))
+        self.assertIn("10 evaluations", stop.reason)
+        stop = Stopping(max_evaluations=0, tolerance=1e-3, stagnation=3)
+        stop.record_round(1.0)
+        for _ in range(3):
+            stop.record_round(1.0 - 1e-4)
+        self.assertTrue(stop.should_stop(1))
+        self.assertIn("no improvement", stop.reason)
+
+    def test_the_same_seed_gives_the_same_run(self):
+        from femexploration.algorithms import optimize
+
+        a = _drive(optimize.make_optimizer(_opt_spec(method={"algorithm": "DifferentialEvolution", "max_evaluations": 80, "population": 8}, seed=9)), self._sphere)
+        b = _drive(optimize.make_optimizer(_opt_spec(method={"algorithm": "DifferentialEvolution", "max_evaluations": 80, "population": 8}, seed=9)), self._sphere)
+        self.assertEqual([r.inputs for r in a], [r.inputs for r in b])
+
+    def test_encode_inverts_decode(self):
+        from femexploration.algorithms import sampling
+
+        var = Variable(name="v", lower=2.0, upper=8.0, nominal=5.0)
+        for u in (0.0, 0.3, 1.0):
+            self.assertAlmostEqual(sampling.encode_one(sampling.decode_one(u, var), var), u)
+        integer = Variable(name="i", var_type=model.INTEGER, lower=1, upper=5, nominal=3)
+        self.assertEqual(sampling.decode_one(sampling.encode_one(4, integer), integer), 4.0)
+
+
+class TestNSGA2(unittest.TestCase):
+    """NSGA-II on ZDT1, whose front is f2 = 1 - sqrt(f1) on [0, 1]."""
+
+    @staticmethod
+    def _zdt1(values):
+        x = [values[k] for k in sorted(values)]
+        f1 = x[0]
+        g = 1 + 9 * sum(x[1:]) / (len(x) - 1)
+        f2 = g * (1 - (f1 / g) ** 0.5)
+        return {"f": f1, "f2": f2, "g": 0.0}
+
+    def _spec(self, k=4, evaluations=1200, population=40):
+        spec = _opt_spec(
+            k=k,
+            objectives=[Objective(name="F1", response="f"), Objective(name="F2", response="f2")],
+            method={"algorithm": "NSGA2", "population": population, "max_evaluations": evaluations, "stagnation": 0},
+            seed=3,
+        )
+        for var in spec.variables:
+            var.lower, var.upper, var.nominal = 0.0, 1.0, 0.5
+        return spec
+
+    def test_the_front_approaches_zdt1(self):
+        from femexploration.algorithms import moo
+        from femexploration.algorithms import optimize
+
+        planner = optimize.make_optimizer(self._spec())
+        _drive(planner, self._zdt1)
+        front = planner.front()
+        self.assertGreaterEqual(len(front), 10)
+        # every front member is close to the analytic curve
+        gaps = [abs(f[1] - (1 - f[0] ** 0.5)) for _u, f, _v, _m in front]
+        self.assertLess(sum(gaps) / len(gaps), 0.15)
+        # and the front spreads across f1
+        f1 = [f[0] for _u, f, _v, _m in front]
+        self.assertLess(min(f1), 0.15)
+        self.assertGreater(max(f1), 0.6)
+
+    def test_non_dominated_sort_and_crowding(self):
+        from femexploration.algorithms import moo
+
+        entries = [([1.0, 5.0], 0.0), ([2.0, 2.0], 0.0), ([5.0, 1.0], 0.0), ([3.0, 3.0], 0.0), ([1.0, 1.0], 2.0)]
+        fronts = moo.non_dominated_sort(entries)
+        self.assertEqual(fronts[0], [0, 1, 2])
+        self.assertEqual(fronts[1], [3])
+        # the infeasible point ranks after every feasible one
+        self.assertEqual(fronts[-1], [4])
+        distance = moo.crowding_distance([[1.0, 5.0], [2.0, 2.0], [5.0, 1.0]])
+        self.assertEqual(distance[0], float("inf"))
+        self.assertTrue(0 < distance[1] < float("inf"))
+
+    def test_pareto_rows_in_the_table_agree_with_the_sorter(self):
+        """The design point table computes its own Pareto filter."""
+        from femexploration.algorithms import moo
+
+        entries = [([1.0, 5.0], 0.0), ([2.0, 2.0], 0.0), ([3.0, 3.0], 0.0)]
+        self.assertEqual(moo.pareto_front(entries), [0, 1])
+
+
 class TestStats(unittest.TestCase):
     """Correlation and sensitivity, with no FreeCAD."""
 
@@ -1214,10 +1489,61 @@ class TestCharts(unittest.TestCase):
             charts.draw_correlation(Figure(), data)
         self.assertIn("completed design points", str(caught.exception))
 
-    def test_the_registry_has_both_charts(self):
+    def test_the_registry_has_every_chart(self):
         from femguiutils import exploration_charts as charts
 
-        self.assertEqual(set(charts.CHARTS) >= {"Correlation", "Sensitivity"}, True)
+        self.assertTrue(set(charts.CHARTS) >= {"Correlation", "Sensitivity", "History", "Pareto"})
+
+    def _opt_data(self):
+        from types import SimpleNamespace
+
+        from femguiutils import exploration_charts as charts
+
+        rows = []
+        for i in range(12):
+            f1 = i / 11.0
+            f2 = 1.0 - f1**0.5 + (0.3 if i % 4 == 0 else 0.0)
+            rows.append({
+                "point_id": f"p{i}", "state": "completed",
+                "inputs": {"Input": [float(i), "mm"]},
+                "outputs": {"A": f1, "B": f2},
+                "objectives": {"MinA": f1, "MinB": f2},
+                "violations": {"Lim": 0.5 if i == 5 else 0.0},
+            })
+        columns = [SimpleNamespace(key="Input", label="Width", unit="mm", role="input"),
+                   SimpleNamespace(key="A", label="A", unit="", role="response"),
+                   SimpleNamespace(key="B", label="B", unit="", role="response"),
+                   SimpleNamespace(key="MinA", label="MinA", unit="", role="objective"),
+                   SimpleNamespace(key="MinB", label="MinB", unit="", role="objective"),
+                   SimpleNamespace(key="Lim", label="Lim", unit="", role="violation")]
+        return charts.chart_data(rows, columns, "Opt")
+
+    def test_history_draws_best_so_far_and_infeasible_rate(self):
+        from matplotlib.figure import Figure
+
+        from femguiutils import exploration_charts as charts
+
+        axes = charts.draw_history(Figure(), self._opt_data())
+        self.assertEqual(len(axes), 2)
+        line = axes[0].lines[0]
+        ys = list(line.get_ydata())
+        # best so far never rises
+        self.assertTrue(all(b <= a + 1e-12 for a, b in zip(ys, ys[1:])))
+
+    def test_pareto_highlights_the_front_and_is_pickable(self):
+        from matplotlib.figure import Figure
+
+        from femguiutils import exploration_charts as charts
+
+        picked = []
+        figure = Figure()
+        axes = charts.draw_pareto(figure, self._opt_data(), on_pick=picked.append)
+        self.assertEqual(len(axes.collections), 1)
+        self.assertEqual(len(axes.pareto_ids), 12)
+        self.assertIn("non-dominated", axes.get_title())
+        # the picker is armed on the scatter; simulate the callback path
+        scatter = axes.collections[0]
+        self.assertTrue(scatter.get_picker())
 
 
 try:
@@ -1682,6 +2008,126 @@ class TestExplorationDOE(unittest.TestCase):
 
 
 @needs_freecad
+class TestExplorationOptimization(unittest.TestCase):
+    """Objectives, constraints and the optimization study, end to end."""
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.tmp = tempfile.mkdtemp(prefix="fem_expl_opt_")
+        self.doc = FreeCAD.newDocument("TestExplorationOptimization")
+        self.box = self.doc.addObject("Part::Box", "Box")
+        self.box.Length, self.box.Width, self.box.Height = 8000, 1000, 1000
+        self.doc.recompute()
+        analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height"):
+            var = explorationpromote.promote(self.box, prop, analysis)
+            var.Lower, var.Upper = 500.0, 1500.0
+        self.pset = explorationutils.get_parameter_set(analysis)
+        volume = ObjectsFem.makeExplorationOutput(self.doc, "Volume")
+        volume.Source = model.EXPRESSION
+        volume.Expression = "Box.Shape.Volume"
+        self.pset.addObject(volume)
+        area = ObjectsFem.makeExplorationOutput(self.doc, "Section")
+        area.Source = model.EXPRESSION
+        area.Expression = "Box.Width * Box.Height"
+        self.pset.addObject(area)
+
+        self.objective = ObjectsFem.makeExplorationObjective(self.doc, "MinVolume")
+        self.objective.Output = volume
+        self.pset.addObject(self.objective)
+        self.constraint = ObjectsFem.makeExplorationConstraint(self.doc, "MinSection")
+        self.constraint.Output = area
+        self.constraint.Operator = model.GE
+        self.constraint.Limit = 900000.0
+        self.pset.addObject(self.constraint)
+
+        self.study = ObjectsFem.makeExplorationOptimization(self.doc, "Optimization")
+        self.study.ParameterSet = self.pset
+        self.study.Algorithm = "DifferentialEvolution"
+        self.study.PopulationSize = 8
+        self.study.MaxEvaluations = 64
+        self.study.Stagnation = 0
+        self.study.Seed = 5
+        analysis.addObject(self.study)
+        self.doc.recompute()
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_objects_have_their_types(self):
+        from femtools import explorationutils
+
+        self.assertEqual(self.objective.Proxy.Type, explorationutils.OBJECTIVE_TYPE)
+        self.assertEqual(self.constraint.Proxy.Type, explorationutils.CONSTRAINT_TYPE)
+        self.assertEqual(self.study.Proxy.Type, explorationutils.OPTIMIZATION_TYPE)
+        self.assertEqual(explorationutils.get_objectives(self.pset), [self.objective])
+        self.assertEqual(explorationutils.get_constraints(self.pset), [self.constraint])
+
+    def test_the_spec_carries_objective_constraint_and_method(self):
+        from femexploration import api
+
+        spec = api.study_spec(self.study)
+        self.assertEqual(spec.study_type, "Optimization")
+        self.assertEqual(spec.method["algorithm"], "DifferentialEvolution")
+        self.assertEqual(spec.method["max_evaluations"], 64)
+        self.assertEqual(spec.method["constraints"], "FeasibilityRules")
+        self.assertEqual([o.response for o in spec.objectives], ["Volume"])
+        self.assertEqual(spec.constraints[0].operator, model.GE)
+        self.assertEqual(spec.constraints[0].limit, 900000.0)
+
+    def test_the_optimization_runs_and_respects_the_constraint(self):
+        """Minimise volume with Width*Height >= 0.9e6: the answer is on that boundary."""
+        from femexploration import api
+
+        run_dir = os.path.join(self.tmp, "run")
+        result = api.run_study(self.study, run_dir=run_dir)
+        self.assertEqual(len(result.failed), 0, [r.error for r in result.failed])
+        self.assertLessEqual(len(result.results), 64)
+        best = result.best()
+        self.assertIsNotNone(best)
+        self.assertTrue(best.feasible)
+        section = best.outputs["Section"]
+        self.assertGreaterEqual(section, 900000.0 - 1e-6)
+        self.assertLess(section, 1.3e6)
+        # the table carries objective and violation columns for the charts
+        table = [c for c in self.study.Group if c.Proxy.Type == "Fem::ExplorationDesignPoints"][0]
+        self.assertIn("objective", table.ColumnRoles)
+        self.assertIn("violation", table.ColumnRoles)
+        self.assertEqual(table.BestPoint, best.point_id)
+        rows = table.Proxy.rows(table)
+        self.assertTrue(any(r["violations"].get("MinSection", 0) > 0 for r in rows))
+
+    def test_the_study_refuses_to_run_without_an_objective(self):
+        from femexploration import api
+
+        self.doc.removeObject(self.objective.Name)
+        self.doc.recompute()
+        with self.assertRaises(ValueError):
+            api.run_study(self.study, run_dir=os.path.join(self.tmp, "none"))
+
+    def test_settings_survive_save_and_reopen(self):
+        path = os.path.join(self.tmp, "opt.FCStd")
+        self.study.Algorithm = "NSGA2"
+        self.study.ConstraintHandling = "Penalty"
+        self.doc.saveAs(path)
+        self.FreeCAD.closeDocument(self.doc.Name)
+        self.doc = self.FreeCAD.openDocument(path)
+        study = self.doc.getObject("Optimization")
+        self.assertEqual(study.Algorithm, "NSGA2")
+        self.assertEqual(study.ConstraintHandling, "Penalty")
+        objective = self.doc.getObject("MinVolume")
+        self.assertEqual(objective.Output.Name, "Volume")
+        self.assertEqual(self.doc.getObject("MinSection").Limit, 900000.0)
+
+
+@needs_freecad
 class TestLocalParallelBackend(unittest.TestCase):
     """Several FreeCADCmd workers on this machine."""
 
@@ -1878,6 +2324,76 @@ class TestDOEPanel(unittest.TestCase):
         self.panel.set_object_params()
         self.assertEqual(self.doe.Plan, "Sobol")
         self.assertEqual(self.doe.PointCount, 9)
+
+
+@needs_freecad
+@unittest.skipUnless(_FreeCAD is not None and _FreeCAD.GuiUp, "requires a GUI session")
+class TestOptimizationPanels(unittest.TestCase):
+    """The parameter set panel's objective rows and the optimization panel."""
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.doc = FreeCAD.newDocument("TestOptimizationPanels")
+        box = self.doc.addObject("Part::Box", "Box")
+        self.doc.recompute()
+        analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height"):
+            explorationpromote.promote(box, prop, analysis)
+        self.doc.recompute()
+        self.pset = explorationutils.get_parameter_set(analysis)
+        out = ObjectsFem.makeExplorationOutput(self.doc, "Volume")
+        out.Source = model.EXPRESSION
+        out.Expression = "Box.Shape.Volume"
+        self.pset.addObject(out)
+        self.study = ObjectsFem.makeExplorationOptimization(self.doc, "Optimization")
+        self.study.ParameterSet = self.pset
+        analysis.addObject(self.study)
+        self.doc.recompute()
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+
+    def test_adding_an_objective_through_the_panel(self):
+        from femtaskpanels import task_exploration_parameters
+        from femtools import explorationutils
+
+        panel = task_exploration_parameters._TaskPanel(self.pset)
+        self.assertEqual(panel.objective_model.rowCount(), 0)
+        panel.add_objective()
+        panel.add_constraint()
+        self.assertEqual(panel.objective_model.rowCount(), 1)
+        self.assertEqual(panel.constraint_model.rowCount(), 1)
+        objective = explorationutils.get_objectives(self.pset)[0]
+        self.assertEqual(objective.Output.Label, "Volume")
+        self.assertEqual(panel.objective_model.output_labels(), ["Volume"])
+        self.doc.abortTransaction()
+
+    def test_the_optimization_panel_previews_the_first_batch(self):
+        import ObjectsFem
+
+        objective = ObjectsFem.makeExplorationObjective(self.doc, "MinVolume")
+        objective.Output = self.doc.getObject("Volume")
+        self.pset.addObject(objective)
+        self.doc.recompute()
+        from femtaskpanels import task_exploration_optimization
+
+        panel = task_exploration_optimization._TaskPanel(self.study)
+        panel.plan.setCurrentText("NelderMead")
+        self.assertEqual(panel.table.rowCount(), 3)  # k + 1 simplex vertices
+        panel.plan.setCurrentText("DifferentialEvolution")
+        panel.population_size.setValue(6)
+        self.assertEqual(panel.table.rowCount(), 6)
+        panel.evaluations.setValue(42)
+        panel.set_object_params()
+        self.assertEqual(self.study.Algorithm, "DifferentialEvolution")
+        self.assertEqual(self.study.MaxEvaluations, 42)
+        self.assertEqual(self.study.PopulationSize, 6)
 
 
 @needs_freecad

@@ -92,6 +92,11 @@ class _TaskPanel(base_femlogtaskpanel._BaseLogTaskPanel):
 
     #: window title of the settings box
     settings_title = "Parametric Sweep"
+    #: label of the plan combo
+    plan_label = "Plan"
+
+    def current_plan(self, obj):
+        return getattr(obj, "Plan", "")
 
     def plan_names(self):
         from femobjects.exploration_sweep import PLANS
@@ -106,8 +111,8 @@ class _TaskPanel(base_femlogtaskpanel._BaseLogTaskPanel):
         form = QtGui.QFormLayout()
         self.plan = QtGui.QComboBox()
         self.plan.addItems(self.plan_names())
-        self.plan.setCurrentText(obj.Plan)
-        form.addRow("Plan", self.plan)
+        self.plan.setCurrentText(self.current_plan(obj))
+        form.addRow(self.plan_label, self.plan)
         self._extra_settings(form, obj)
 
         self.backend = QtGui.QComboBox()
@@ -150,12 +155,13 @@ class _TaskPanel(base_femlogtaskpanel._BaseLogTaskPanel):
     # ------------------------------------------------------------ settings
 
     def get_object_params(self):
-        self.plan.setCurrentText(self.obj.Plan)
+        self.plan.setCurrentText(self.current_plan(self.obj))
         self.backend.setCurrentText(self.obj.Backend)
         self.resume.setChecked(bool(self.obj.ResumeFromCache))
 
     def set_object_params(self):
-        self.obj.Plan = self.plan.currentText()
+        if hasattr(self.obj, "Plan"):
+            self.obj.Plan = self.plan.currentText()
         self.obj.Backend = self.backend.currentText()
         self.obj.ResumeFromCache = self.resume.isChecked()
 

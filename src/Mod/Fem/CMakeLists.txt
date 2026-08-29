@@ -218,9 +218,12 @@ SET(FemObjects_SRCS
     femobjects/element_geometry2D.py
     femobjects/element_rotation1D.py
     femobjects/exploration_base.py
+    femobjects/exploration_constraint.py
     femobjects/exploration_designpoints.py
     femobjects/exploration_doe.py
     femobjects/exploration_input.py
+    femobjects/exploration_objective.py
+    femobjects/exploration_optimization.py
     femobjects/exploration_output.py
     femobjects/exploration_parameters.py
     femobjects/exploration_sweep.py
@@ -623,6 +626,8 @@ SET(FemExplorationBackends_SRCS
 
 SET(FemExplorationAlgorithms_SRCS
     femexploration/algorithms/__init__.py
+    femexploration/algorithms/moo.py
+    femexploration/algorithms/optimize.py
     femexploration/algorithms/sampling.py
 )
 
@@ -758,7 +763,10 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_element_geometry2D.py
     femtaskpanels/task_element_rotation1D.py
     femtaskpanels/task_exploration_designpoints.py
+    femtaskpanels/task_exploration_constraint.py
     femtaskpanels/task_exploration_input.py
+    femtaskpanels/task_exploration_objective.py
+    femtaskpanels/task_exploration_optimization.py
     femtaskpanels/task_exploration_output.py
     femtaskpanels/task_exploration_parameters.py
     femtaskpanels/task_exploration_doe.py
@@ -845,7 +853,10 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_element_geometry2D.py
     femviewprovider/view_element_rotation1D.py
     femviewprovider/view_exploration_designpoints.py
+    femviewprovider/view_exploration_constraint.py
     femviewprovider/view_exploration_input.py
+    femviewprovider/view_exploration_objective.py
+    femviewprovider/view_exploration_optimization.py
     femviewprovider/view_exploration_output.py
     femviewprovider/view_exploration_parameters.py
     femviewprovider/view_exploration_doe.py

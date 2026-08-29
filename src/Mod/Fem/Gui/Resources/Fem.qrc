@@ -53,6 +53,11 @@
         <file>icons/FEM_ExplorationDOE.svg</file>
         <file>icons/FEM_ExplorationCorrelation.svg</file>
         <file>icons/FEM_ExplorationSensitivity.svg</file>
+        <file>icons/FEM_ExplorationOptimization.svg</file>
+        <file>icons/FEM_ExplorationHistory.svg</file>
+        <file>icons/FEM_ExplorationPareto.svg</file>
+        <file>icons/FEM_ExplorationObjective.svg</file>
+        <file>icons/FEM_ExplorationConstraint.svg</file>
         <file>icons/FEM_EquationDeformation.svg</file>
         <file>icons/FEM_EquationElasticity.svg</file>
         <file>icons/FEM_EquationElectricforce.svg</file>
