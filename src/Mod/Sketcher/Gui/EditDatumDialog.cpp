@@ -28,6 +28,7 @@
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QDialog>
+#include <QEventLoop>
 #include <QLineEdit>
 #include <QMouseEvent>
 
@@ -40,6 +41,7 @@
 #include <Gui/Notifications.h>
 #include <Gui/View3DInventor.h>
 #include <Gui/View3DInventorViewer.h>
+#include <Gui/Navigation/NavigationStyle.h>
 #include <Gui/Document.h>
 #include <Mod/Sketcher/App/GeometryFacade.h>
 #include <Mod/Sketcher/App/SketchObject.h>
@@ -100,7 +102,13 @@ EditDatumDialog::EditDatumDialog(int tid, Sketcher::SketchObject* pcSketch, int 
 }
 
 EditDatumDialog::~EditDatumDialog()
-{}
+{
+    if (activeDialog) {
+        qApp->removeEventFilter(this);
+        Gui::NavigationStyle::setConfirmTarget(nullptr);
+        activeDialog = nullptr;
+    }
+}
 
 int EditDatumDialog::exec(bool atCursor)
 {
@@ -126,6 +134,12 @@ int EditDatumDialog::exec(bool atCursor)
             ui_ins_datum.reset(new Ui_InsertDatum);
             ui_ins_datum->setupUi(&dlg);
         }
+        // QDialog::exec() would set WA_ShowModal and the window manager would
+        // then discard clicks on the 3D view before Qt ever sees them. A local
+        // event loop keeps the call sites blocking while the box itself is not
+        // modal, so a middle click over the viewport can accept it.
+        dlg.setWindowModality(Qt::NonModal);
+        dlg.setModal(false);
         double datum = Constr->getValue();
 
         bool showRadiusDiameterBtns = Constr->Type == Sketcher::Radius
@@ -212,17 +226,6 @@ int EditDatumDialog::exec(bool atCursor)
         connect(&dlg, &QDialog::accepted, this, &EditDatumDialog::accepted);
         connect(&dlg, &QDialog::rejected, this, &EditDatumDialog::rejected);
 
-        // Watched on the dialog and on its widgets, so a middle click anywhere
-        // over the box accepts it.  The text entries are skipped: the middle
-        // button pastes the primary selection there, which is worth more than a
-        // second way to accept.
-        dlg.installEventFilter(this);
-        for (QWidget* child : dlg.findChildren<QWidget*>()) {
-            if (!qobject_cast<QAbstractSpinBox*>(child) && !qobject_cast<QLineEdit*>(child)) {
-                child->installEventFilter(this);
-            }
-        }
-
         if (atCursor) {
             dlg.show();  // Need to show the dialog so geometry is computed
             QRect pg = dlg.parentWidget()->geometry();
@@ -237,7 +240,23 @@ int EditDatumDialog::exec(bool atCursor)
             dlg.setGeometry(x, y, dlg.geometry().width(), dlg.geometry().height());
         }
 
-        return dlg.exec();
+        activeDialog = &dlg;
+        qApp->installEventFilter(this);
+        Gui::NavigationStyle::setConfirmTarget(&dlg);
+
+        dlg.show();
+        dlg.raise();
+        dlg.activateWindow();
+
+        QEventLoop loop;
+        QObject::connect(&dlg, &QDialog::finished, &loop, &QEventLoop::quit);
+        loop.exec();
+
+        Gui::NavigationStyle::setConfirmTarget(nullptr);
+        qApp->removeEventFilter(this);
+        activeDialog = nullptr;
+
+        return dlg.result();
     }
 
     return QDialog::Rejected;
@@ -271,19 +290,40 @@ void EditDatumDialog::typeChanged(bool checked)
 
 bool EditDatumDialog::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->type() == QEvent::MouseButtonPress
-        && static_cast<QMouseEvent*>(event)->button() == Qt::MiddleButton) {
-        // The dialog is a local in exec(), so it is reached through the widget
-        // the click landed on rather than being held onto.
-        if (auto* widget = qobject_cast<QWidget*>(watched)) {
-            if (auto* dialog = qobject_cast<QDialog*>(widget->window())) {
-                dialog->accept();
-                return true;
-            }
+    if (!activeDialog || event->type() != QEvent::MouseButtonPress) {
+        return QObject::eventFilter(watched, event);
+    }
+    if (static_cast<QMouseEvent*>(event)->button() != Qt::MiddleButton) {
+        return QObject::eventFilter(watched, event);
+    }
+
+    auto* widget = qobject_cast<QWidget*>(watched);
+    if (!widget) {
+        return QObject::eventFilter(watched, event);
+    }
+
+    // The middle button pastes the primary selection in the value and name
+    // fields; taking that away to confirm the dialog would be a poor trade.
+    if (qobject_cast<QAbstractSpinBox*>(widget) || qobject_cast<QLineEdit*>(widget)) {
+        return QObject::eventFilter(watched, event);
+    }
+
+    // Clicks on the 3D view go through NavigationStyle::confirmActiveDialog so
+    // a tap can be told from a pan, and so the release can wind the style
+    // back to idle. Accepting here would swallow that release.
+    for (QWidget* ancestor = widget; ancestor; ancestor = ancestor->parentWidget()) {
+        if (qobject_cast<Gui::View3DInventor*>(ancestor)
+            || qobject_cast<Gui::View3DInventorViewer*>(ancestor)) {
+            return QObject::eventFilter(watched, event);
         }
     }
 
-    return QObject::eventFilter(watched, event);
+    // Accepting destroys the box before the matching release is delivered.
+    // That release then lands on the 3D view; mark the gesture spent so
+    // confirmActiveDialog does not also close the sketch.
+    Gui::NavigationStyle::noteOverlayConfirmed();
+    activeDialog->accept();
+    return true;
 }
 
 void EditDatumDialog::accepted()

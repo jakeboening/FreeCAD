@@ -2702,7 +2702,7 @@ Base::BoundBox3d ViewProviderSketch::_getBoundingBox(
 
     // Apply the accumulated transformation
     if (bbox.IsValid()) {
-        bbox.Transformed(m);
+        bbox = bbox.Transformed(m);
     }
 
     return bbox;
@@ -4658,18 +4658,39 @@ void ViewProviderSketch::setEditViewer(Gui::View3DInventorViewer* viewer, int Mo
 
     SbRotation rot((float)tmp[0], (float)tmp[1], (float)tmp[2], (float)tmp[3]);
 
-    // Will the sketch be visible from the new position (#0000957)?
-    //
+    // Face the sketch plane and frame its geometry.  Orientation-only
+    // animation used to overwrite the fit, so the 3D zoom was kept.
     SoCamera* camera = viewer->getSoRenderManager()->getCamera();
-    SbVec3f curdir;// current view direction
-    camera->orientation.getValue().multVec(SbVec3f(0, 0, -1), curdir);
-    SbVec3f plnpos = Base::convertTo<SbVec3f>(plm.getPosition());
-    camera->position.setValue(plnpos - camera->focalDistance.getValue() * curdir);
-    viewer->setCameraOrientation(rot);
-    if (getSketchObject()->Geometry.getSize() > 0 || getSketchObject()->ExternalGeometry.getSize() > 0) {
-        std::vector<App::SubObjectT> objs;
-        objs.emplace_back(getObject(), "");
-        viewer->viewObjects(objs);
+    if (camera) {
+        const Gui::View3DInventorViewer::CameraPose from = viewer->cameraPose();
+
+        SbVec3f viewDir;
+        rot.multVec(SbVec3f(0, 0, -1), viewDir);
+        SbVec3f plnpos = Base::convertTo<SbVec3f>(plm.getPosition());
+        camera->orientation.setValue(rot);
+        camera->position.setValue(plnpos - camera->focalDistance.getValue() * viewDir);
+
+        if (getSketchObject()->Geometry.getSize() > 0
+            || getSketchObject()->ExternalGeometry.getSize() > 0) {
+            Base::BoundBox3d bbox = getBoundingBox();
+            if (bbox.IsValid()) {
+                SbBox3f box(
+                    static_cast<float>(bbox.MinX),
+                    static_cast<float>(bbox.MinY),
+                    static_cast<float>(bbox.MinZ),
+                    static_cast<float>(bbox.MaxX),
+                    static_cast<float>(bbox.MaxY),
+                    static_cast<float>(bbox.MaxZ)
+                );
+                float aspect =
+                    viewer->getSoRenderManager()->getViewportRegion().getViewportAspectRatio();
+                camera->viewBoundingBox(box, aspect, 1.0F);
+            }
+        }
+
+        const Gui::View3DInventorViewer::CameraPose to = viewer->cameraPose();
+        viewer->setCameraPose(from);
+        viewer->animateCameraTo(to);
     }
 
     viewer->setEditing(true);

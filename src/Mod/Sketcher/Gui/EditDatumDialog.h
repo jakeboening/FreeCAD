@@ -27,6 +27,8 @@
 #include <QObject>
 #include <memory>
 
+class QDialog;
+
 
 namespace Sketcher
 {
@@ -54,8 +56,10 @@ public:
     bool isSuccess();
 
 protected:
-    /// Middle click over the datum dialog accepts it.  The value field is left
-    /// alone, where the middle button still pastes the primary selection.
+    /// Middle click accepts the datum dialog from anywhere except a text
+    /// field, where the middle button still pastes the primary selection.
+    /// Clicks on the 3D view are left for NavigationStyle so a tap can be
+    /// told from a pan.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
@@ -65,6 +69,7 @@ private:
     bool success;
     std::unique_ptr<Ui_InsertDatum> ui_ins_datum;
     int transactionID;
+    QDialog* activeDialog {nullptr};
 
 private Q_SLOTS:
     void accepted();

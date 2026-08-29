@@ -41,6 +41,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QPointer>
 #include <QTimer>
 #include <QByteArray>
 #include <QCursor>
@@ -78,6 +79,25 @@
 #include "WorkbenchManager.h"
 
 using namespace Gui;
+
+namespace
+{
+QPointer<QObject> confirmTarget;
+bool overlayConfirmHandled = false;
+}
+
+void NavigationStyle::setConfirmTarget(QObject* target)
+{
+    confirmTarget = target;
+    if (target) {
+        overlayConfirmHandled = false;
+    }
+}
+
+void NavigationStyle::noteOverlayConfirmed()
+{
+    overlayConfirmHandled = true;
+}
 
 NavigationStyleContextMenuReceiver::NavigationStyleContextMenuReceiver(
     ViewProviderDocumentObject* viewProvider,
@@ -2291,6 +2311,7 @@ SbBool NavigationStyle::processEvent(const SoEvent* const ev)
     if (SoMouseButtonEvent::isButtonPressEvent(ev, SoMouseButtonEvent::BUTTON3)) {
         this->middleDownTime = ev->getTime();
         this->middleDownPos = ev->getPosition();
+        overlayConfirmHandled = false;
     }
     else {
         confirmActiveDialog(ev);
@@ -2757,17 +2778,31 @@ SbBool NavigationStyle::confirmActiveDialog(const SoEvent* const ev)
         return false;
     }
 
-    if (!Gui::Control().activeDialog()) {
+    if (confirmTarget) {
+        // Spend the gesture before accept(): that quits the overlay's nested
+        // loop, the box is destroyed, and confirmTarget goes null.  The same
+        // release must not then fall through to the task panel.
+        overlayConfirmHandled = true;
+        QMetaObject::invokeMethod(confirmTarget, "accept");
+    }
+    else if (overlayConfirmHandled) {
+        // Press already accepted the overlay (e.g. click on the box itself).
+        // The matching release lands on the 3D view once the box is gone.
+        overlayConfirmHandled = false;
+    }
+    else if (Gui::Control().activeDialog()) {
+        // Accepting tears down the dialog, and with it whatever is being edited,
+        // so it happens once this event is off the stack rather than underneath
+        // it.
+        QTimer::singleShot(0, QCoreApplication::instance(), []() {
+            if (Gui::Control().activeDialog() && !confirmTarget && !overlayConfirmHandled) {
+                Gui::Control().accept();
+            }
+        });
+    }
+    else {
         return false;
     }
-
-    // Accepting tears down the dialog, and with it whatever is being edited, so
-    // it happens once this event is off the stack rather than underneath it.
-    QTimer::singleShot(0, QCoreApplication::instance(), []() {
-        if (Gui::Control().activeDialog()) {
-            Gui::Control().accept();
-        }
-    });
 
     // The event is deliberately not consumed.  Swallowing the release would
     // leave the navigation style believing the middle button is still down, and

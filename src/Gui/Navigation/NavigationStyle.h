@@ -263,6 +263,13 @@ public:
     void openQuickMenu();
     /// Middle click with a task dialog open means "done"; @return whether it did.
     SbBool confirmActiveDialog(const SoEvent* const ev);
+    /// A floating dialog a middle-click tap should accept instead of the task
+    /// panel. The sketcher datum box uses this so the click can land on the
+    /// 3D view. Pass nullptr to clear.
+    static void setConfirmTarget(QObject* target);
+    /// The current middle-click already accepted the overlay; the release
+    /// must not also accept the task panel.
+    static void noteOverlayConfirmed();
     virtual SbBool processWheelEvent(const SoMouseWheelEvent* const event);
 
     void setPopupMenuEnabled(const SbBool on);
