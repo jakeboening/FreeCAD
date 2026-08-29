@@ -2127,6 +2127,237 @@ class TestExplorationOptimization(unittest.TestCase):
         self.assertEqual(self.doc.getObject("MinSection").Limit, 900000.0)
 
 
+class TestShim(unittest.TestCase):
+    """The stdlib-only script every fleet host runs."""
+
+    def test_the_shim_imports_nothing_beyond_the_standard_library(self):
+        import ast
+
+        from femexploration import shim
+
+        tree = ast.parse(open(shim.__file__).read())
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                imported.add((node.module or "").split(".")[0])
+        self.assertTrue(imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names))
+
+    def test_freecadcmd_env_wins(self):
+        from femexploration import shim
+
+        old = os.environ.get("FREECADCMD")
+        os.environ["FREECADCMD"] = "/nowhere/FreeCADCmd"
+        try:
+            self.assertEqual(shim.find_freecadcmd(), ["/nowhere/FreeCADCmd"])
+        finally:
+            if old is None:
+                del os.environ["FREECADCMD"]
+            else:
+                os.environ["FREECADCMD"] = old
+
+    def test_check_is_json_with_the_expected_keys(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from femexploration import shim
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = shim.main(["--check"])
+        self.assertEqual(code, 0)
+        report = json.loads(out.getvalue().strip().splitlines()[-1])
+        for key in ("host", "platform", "python", "freecadcmd", "gmsh", "ccx"):
+            self.assertIn(key, report)
+
+
+class TestFleetCheckReport(unittest.TestCase):
+    """Comparing host reports, without any host."""
+
+    def test_mismatches_are_named_against_the_reference(self):
+        from femexploration import fleetcheck
+
+        reports = [
+            {"name": "aorus", "reachable": True, "freecad": "1.1.0", "gmsh": "4.13", "ccx": "2.22", "femexploration": 1, "freecadcmd": "x", "problems": []},
+            {"name": "empowered", "reachable": True, "freecad": "1.1.0", "gmsh": "4.12", "ccx": None, "femexploration": 1, "freecadcmd": "x", "problems": []},
+            {"name": "laptop", "reachable": False, "problems": ["unreachable"]},
+        ]
+        reference = reports[0]
+        for report in reports[1:]:
+            if not report.get("reachable"):
+                continue
+            for key in fleetcheck.MUST_MATCH:
+                if report.get(key) != reference.get(key):
+                    report["problems"].append(f"{key} differs")
+        self.assertEqual(reports[1]["problems"], ["gmsh differs", "ccx differs"])
+        text = fleetcheck.format_report({"config": "c.toml", "port": 8765, "port_free": True, "hosts": reports})
+        self.assertIn("unreachable", text)
+        self.assertIn("FreeCAD 1.1.0", text)
+
+
+try:
+    import femfleet as _femfleet
+except ImportError:
+    _femfleet = None
+
+
+@needs_freecad
+@unittest.skipIf(_femfleet is None, "requires femfleet")
+class TestFleetBackend(unittest.TestCase):
+    """The fleet backend against a stand-in dispatcher.
+
+    femfleet's server is replaced by a function that runs each job's argv
+    with this machine's python, exactly as a client would, so the kit, the
+    shim, the worker and the results harvest are all exercised for real;
+    only the network is missing.
+    """
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.tmp = tempfile.mkdtemp(prefix="fem_expl_fleet_")
+        self.run_dir = os.path.join(self.tmp, "run")
+        self.config = os.path.join(self.tmp, "cluster.toml")
+        with open(self.config, "w") as fh:
+            fh.write(
+                "[server]\nport = 8799\n\n[[hosts]]\nname = \"local\"\nkind = \"local\"\n"
+                f"workdir = \"{self.tmp}\"\npython = \"{shutil.which('python3')}\"\nclient_slots = 2\n"
+            )
+        self.doc = FreeCAD.newDocument("TestFleetBackend")
+        box = self.doc.addObject("Part::Box", "Box")
+        box.Length, box.Width, box.Height = 8000, 1000, 1000
+        self.doc.recompute()
+        analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height"):
+            var = explorationpromote.promote(box, prop, analysis)
+            var.Lower, var.Upper, var.LevelCount = 500.0, 1500.0, 2
+        pset = explorationutils.get_parameter_set(analysis)
+        out = ObjectsFem.makeExplorationOutput(self.doc, "Volume")
+        out.Source = model.EXPRESSION
+        out.Expression = "Box.Shape.Volume"
+        pset.addObject(out)
+        self.sweep = ObjectsFem.makeExplorationSweep(self.doc, "Sweep")
+        self.sweep.ParameterSet = pset
+        self.sweep.ClusterConfig = self.config
+        analysis.addObject(self.sweep)
+        self.doc.recompute()
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _fake_run_jobs(self, executed):
+        """Run every job the way a client would, in the server's cwd."""
+        import shlex
+        import subprocess
+
+        def run_jobs(jobs, *, config_path, cwd, port=None, sync=(), stats_path=None, **kw):
+            executed.append({"jobs": jobs, "config": config_path, "cwd": cwd, "sync": sync})
+            env = dict(os.environ)
+            env["FREECADCMD"] = os.path.join(self.FreeCAD.getHomePath(), "bin", "FreeCADCmd")
+            ok = True
+            for job in jobs:
+                code = subprocess.call(
+                    [shutil.which("python3")] + shlex.split(job.argv), cwd=str(cwd), env=env,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                ok = ok and code == 0
+            return ok
+
+        return run_jobs
+
+    def test_the_backend_is_offered_when_femfleet_imports(self):
+        from femexploration import backends
+
+        self.assertIn("Fleet", backends.available())
+
+    def test_a_missing_cluster_configuration_is_refused_clearly(self):
+        from femexploration import api
+        from femexploration.backends.fleet import FleetBackend
+        from femexploration.store import PointStore
+
+        backend = FleetBackend(self.doc, config=os.path.join(self.tmp, "nope.toml"))
+        with self.assertRaises(RuntimeError) as caught:
+            backend.prepare(api.study_spec(self.sweep), PointStore(self.run_dir))
+        self.assertIn("no cluster configuration", str(caught.exception))
+
+    def test_a_busy_port_is_refused_clearly(self):
+        import socket
+
+        from femexploration import api
+        from femexploration.backends.fleet import FleetBackend
+        from femexploration.store import PointStore
+
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("0.0.0.0", 8799))
+        holder.listen(1)
+        try:
+            backend = FleetBackend(self.doc, config=self.config)
+            with self.assertRaises(RuntimeError) as caught:
+                backend.prepare(api.study_spec(self.sweep), PointStore(self.run_dir))
+            self.assertIn("8799", str(caught.exception))
+            self.assertIn("icecc", str(caught.exception))
+        finally:
+            holder.close()
+
+    def test_a_sweep_runs_through_the_kit_and_the_shim(self):
+        from femexploration import api
+        from femexploration import engine
+        from femexploration import planner as planner_module
+        from femexploration.backends.fleet import FleetBackend
+        from femexploration.cancel import CancelToken
+        from femexploration.store import PointStore
+
+        executed = []
+        token = CancelToken(self.run_dir)
+        backend = FleetBackend(
+            self.doc, cancel=token, config=self.config, run_jobs=self._fake_run_jobs(executed), points_per_job=2
+        )
+        spec = api.study_spec(self.sweep)
+        store = PointStore(self.run_dir).prepare()
+        token.reset()
+        result = engine.run_study(spec, store, backend, planner_module.make_planner(spec), cancel=token)
+
+        self.assertEqual(len(result.completed), 4, [r.error for r in result.results])
+        self.assertEqual(len(executed), 1)
+        jobs = executed[0]["jobs"]
+        self.assertEqual(len(jobs), 2)
+        self.assertTrue(all("femexploration_shim.py --job" in j.argv for j in jobs))
+        sync = executed[0]["sync"][0]
+        self.assertIn("model.FCStd", sync.paths)
+        self.assertTrue(sync.remote_subdir.startswith("fem_exploration/"))
+        # the worker name records which job ran the point
+        self.assertEqual({r.worker for r in result.completed}, {"job-0001", "job-0002"})
+        volumes = sorted(r.outputs["Volume"] for r in result.completed)
+        self.assertAlmostEqual(volumes[0], 8000 * 500 * 500, delta=1e-3)
+
+    def test_points_the_fleet_never_reports_are_marked_lost(self):
+        from femexploration import api
+        from femexploration import engine
+        from femexploration import planner as planner_module
+        from femexploration.backends.fleet import FleetBackend
+        from femexploration.cancel import CancelToken
+        from femexploration.store import PointStore
+
+        def silent_run_jobs(jobs, **kw):
+            return False  # nothing ever came back
+
+        token = CancelToken(self.run_dir)
+        backend = FleetBackend(self.doc, cancel=token, config=self.config, run_jobs=silent_run_jobs)
+        spec = api.study_spec(self.sweep)
+        store = PointStore(self.run_dir).prepare()
+        token.reset()
+        result = engine.run_study(spec, store, backend, planner_module.make_planner(spec), cancel=token)
+        self.assertEqual({r.state for r in result.results}, {model.WORKER_LOST})
+        self.assertEqual(len(result.results), 4)
+
+
 @needs_freecad
 class TestLocalParallelBackend(unittest.TestCase):
     """Several FreeCADCmd workers on this machine."""

@@ -441,6 +441,7 @@ class StudySpec:
     resume_from_cache: bool = True
     timeout: float = 0.0
     failure_limit: int = 0
+    cluster_config: str = ""
     model_hash: str = ""
     document: str = ""
     analysis: str = ""

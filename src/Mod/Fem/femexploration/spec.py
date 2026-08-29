@@ -181,6 +181,7 @@ def spec_from_study(study):
         resume_from_cache=bool(getattr(study, "ResumeFromCache", True)),
         timeout=float(getattr(study, "Timeout", 0.0)),
         failure_limit=int(getattr(study, "FailureLimit", 0)),
+        cluster_config=str(getattr(study, "ClusterConfig", "") or ""),
         document=doc.Name,
         analysis=analysis.Name,
         solver=_solver_name(analysis),

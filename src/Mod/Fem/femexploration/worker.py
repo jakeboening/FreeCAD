@@ -67,10 +67,20 @@ sys.exit(worker.main())
 """
 
 
+#: when set, every record also goes to this file, one JSON line each; a
+#: fleet host's stdout is a log file nobody streams, so the file is what
+#: comes back as the job's artifact
+_out_file = None
+
+
 def emit(kind, **payload):
     payload["event"] = kind
-    sys.stdout.write(json.dumps(payload, default=str) + "\n")
+    line = json.dumps(payload, default=str) + "\n"
+    sys.stdout.write(line)
     sys.stdout.flush()
+    if _out_file is not None:
+        _out_file.write(line)
+        _out_file.flush()
 
 
 def _own_argv():
@@ -83,6 +93,7 @@ def _own_argv():
 def build_parser():
     parser = argparse.ArgumentParser(prog="femexploration-worker")
     parser.add_argument("--job", required=True, help="job file written by the backend")
+    parser.add_argument("--out", help="also append every result record to this file")
     return parser
 
 
@@ -137,9 +148,16 @@ def run_job(job, evaluate=None):
 
 
 def main(argv=None):
+    global _out_file
+
     args = build_parser().parse_args(argv if argv is not None else _own_argv())
     with open(args.job) as fh:
         job = json.load(fh)
+    if args.out:
+        import os
+
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+        _out_file = open(args.out, "a")
     try:
         run_job(job)
     except Exception as exc:
@@ -147,6 +165,10 @@ def main(argv=None):
 
         emit("error", message=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
         return 1
+    finally:
+        if _out_file is not None:
+            _out_file.close()
+            _out_file = None
     emit("done")
     return 0
 

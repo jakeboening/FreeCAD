@@ -1509,6 +1509,40 @@ class _ExplorationOptimization(CommandManager):
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
 
 
+class _ExplorationFleetCheck(CommandManager):
+    "The FEM_ExplorationFleetCheck command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationFleetCheck", "Check Fleet")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationFleetCheck",
+            "Probes every host in the femfleet cluster configuration and reports its "
+            "FreeCAD, gmsh and CalculiX versions before any distributed result is trusted",
+        )
+        self.is_active = "with_document"
+
+    def Activated(self):
+        from femexploration import fleetcheck
+
+        config = None
+        for obj in FreeCADGui.Selection.getSelection():
+            config = str(getattr(obj, "ClusterConfig", "") or "") or None
+            if config:
+                break
+        try:
+            report = fleetcheck.check_fleet(config)
+        except Exception as exc:
+            FreeCAD.Console.PrintError(f"Fleet check: {exc}\n")
+            return
+        FreeCAD.Console.PrintMessage(fleetcheck.format_report(report) + "\n")
+        for host in report["hosts"]:
+            if host.get("problems"):
+                FreeCAD.Console.PrintWarning(
+                    f"{host['name']}: " + "; ".join(host["problems"]) + "\n"
+                )
+
+
 class _ExplorationChart(CommandManager):
     """A chart over the selected study's design points."""
 
@@ -1775,6 +1809,7 @@ FreeCADGui.addCommand("FEM_ExplorationPromoteParameter", _ExplorationPromotePara
 FreeCADGui.addCommand("FEM_ExplorationSweep", _ExplorationSweep())
 FreeCADGui.addCommand("FEM_ExplorationDOE", _ExplorationDOE())
 FreeCADGui.addCommand("FEM_ExplorationOptimization", _ExplorationOptimization())
+FreeCADGui.addCommand("FEM_ExplorationFleetCheck", _ExplorationFleetCheck())
 FreeCADGui.addCommand("FEM_ExplorationHistory", _ExplorationChart("History"))
 FreeCADGui.addCommand("FEM_ExplorationPareto", _ExplorationChart("Pareto"))
 FreeCADGui.addCommand("FEM_ExplorationRun", _ExplorationRun())

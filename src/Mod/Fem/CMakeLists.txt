@@ -606,10 +606,12 @@ SET(FemExploration_SRCS
     femexploration/cli.py
     femexploration/engine.py
     femexploration/events.py
+    femexploration/fleetcheck.py
     femexploration/evaluate.py
     femexploration/hashing.py
     femexploration/model.py
     femexploration/planner.py
+    femexploration/shim.py
     femexploration/spec.py
     femexploration/stats.py
     femexploration/store.py
@@ -620,6 +622,7 @@ SET(FemExploration_SRCS
 SET(FemExplorationBackends_SRCS
     femexploration/backends/__init__.py
     femexploration/backends/base.py
+    femexploration/backends/fleet.py
     femexploration/backends/localparallel.py
     femexploration/backends/serial.py
 )

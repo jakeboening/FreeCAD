@@ -163,6 +163,18 @@ def common_study_properties(backends=None):
     )
     prop.append(
         _PropHelper(
+            type="App::PropertyFile",
+            name="ClusterConfig",
+            group="Execution",
+            doc=(
+                "femfleet cluster.toml for the Fleet backend; empty uses the FEM "
+                "preference, then ~/.config/femfleet/cluster.toml"
+            ),
+            value="",
+        )
+    )
+    prop.append(
+        _PropHelper(
             type="App::PropertyInteger",
             name="FormatVersion",
             group="Study",
