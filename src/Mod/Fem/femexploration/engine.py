@@ -123,7 +123,13 @@ def run_study(spec, store, backend, planner, progress=None, cancel=None):
     started = time.time()
 
     store.prepare()
-    store.write_study(spec, extra={"backend": backend.name})
+    store.write_study(
+        spec,
+        extra={
+            "backend": backend.name,
+            "sampler_impl": getattr(planner, "implementation", type(planner).__name__),
+        },
+    )
     backend.prepare(spec, store)
 
     cached = store.results_by_id() if spec.resume_from_cache else {}

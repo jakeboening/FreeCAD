@@ -84,9 +84,13 @@ class StaticPlanner(Planner):
     over in one batch, and that is the end of it.
     """
 
-    def __init__(self, plan):
+    #: what generated the plan, recorded in the study for reproducibility
+    implementation = "static"
+
+    def __init__(self, plan, implementation="static"):
         self._plan = [DesignVector(values=dict(values)) for values in plan]
         self._issued = False
+        self.implementation = implementation
 
     def initial_batch(self):
         self._issued = True
@@ -128,7 +132,7 @@ class ExplicitPlanner(StaticPlanner):
                     raise ValueError(f"{name!r} is not an active design variable")
                 values[name] = float(value[0] if isinstance(value, (list, tuple)) else value)
             plan.append(values)
-        super().__init__(plan)
+        super().__init__(plan, "explicit")
 
 
 def make_planner(spec, points=None):
@@ -145,7 +149,14 @@ def make_planner(spec, points=None):
     plan_name = method.get("plan", "FullFactorial")
 
     if spec.study_type in ("Sweep", "DOE"):
-        return StaticPlanner(sampling.build_plan(plan_name, variables))
+        plan, implementation = sampling.build_plan_with_impl(
+            plan_name,
+            variables,
+            count=int(method.get("point_count", 0) or 0),
+            seed=spec.seed,
+            alpha=method.get("alpha", "FaceCentred"),
+        )
+        return StaticPlanner(plan, implementation)
 
     raise ValueError(
         f"no planner for study type {spec.study_type!r}; "

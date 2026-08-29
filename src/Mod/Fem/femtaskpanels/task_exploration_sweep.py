@@ -90,18 +90,25 @@ class _TaskPanel(base_femlogtaskpanel._BaseLogTaskPanel):
 
     # ------------------------------------------------------------- widgets
 
-    def _build_settings(self, obj):
+    #: window title of the settings box
+    settings_title = "Parametric Sweep"
+
+    def plan_names(self):
         from femobjects.exploration_sweep import PLANS
 
+        return list(PLANS)
+
+    def _build_settings(self, obj):
         widget = QtGui.QWidget()
-        widget.setWindowTitle("Parametric Sweep")
+        widget.setWindowTitle(self.settings_title)
         layout = QtGui.QVBoxLayout(widget)
 
         form = QtGui.QFormLayout()
         self.plan = QtGui.QComboBox()
-        self.plan.addItems(list(PLANS))
+        self.plan.addItems(self.plan_names())
         self.plan.setCurrentText(obj.Plan)
         form.addRow("Plan", self.plan)
+        self._extra_settings(form, obj)
 
         self.backend = QtGui.QComboBox()
         self.backend.addItems(api.available_backends())
@@ -124,6 +131,13 @@ class _TaskPanel(base_femlogtaskpanel._BaseLogTaskPanel):
         self.table.setMaximumHeight(160)
         layout.addWidget(self.table)
         return widget
+
+    def _extra_settings(self, form, obj):
+        """Hook for study types with settings beyond the plan name."""
+
+    def plan_points(self, spec):
+        """The design vectors the current settings produce."""
+        return sampling.build_plan(self.plan.currentText(), spec.active_variables)
 
     def setup_connections(self):
         super().setup_connections()
@@ -158,7 +172,12 @@ class _TaskPanel(base_femlogtaskpanel._BaseLogTaskPanel):
             return
 
         variables = spec.active_variables
-        plan = sampling.build_plan(self.plan.currentText(), variables)
+        try:
+            plan = self.plan_points(spec)
+        except Exception as exc:
+            self.preview.setText(f"<b>Cannot run:</b> {exc}")
+            self.table.setRowCount(0)
+            return
 
         remesh = " Every point is re-meshed." if spec.needs_remesh else " The mesh is reused."
         self.preview.setText(

@@ -405,6 +405,20 @@ def makeExplorationSweep(doc, name="Sweep"):
     return obj
 
 
+def makeExplorationDOE(doc, name="DOE"):
+    """makeExplorationDOE(document, [name]):
+    creates a design exploration design of experiments"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_doe
+
+    exploration_doe.ExplorationDOE(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_doe
+
+        view_exploration_doe.VPExplorationDOE(obj.ViewObject)
+    return obj
+
+
 def makeExplorationDesignPoints(doc, name="DesignPoints"):
     """makeExplorationDesignPoints(document, [name]):
     creates the design point table of a study"""

@@ -207,6 +207,10 @@ def _method(study):
     method = {}
     if hasattr(study, "Plan"):
         method["plan"] = str(study.Plan)
+    if hasattr(study, "PointCount"):
+        method["point_count"] = int(study.PointCount)
+    if hasattr(study, "Alpha"):
+        method["alpha"] = str(study.Alpha)
     return method
 
 

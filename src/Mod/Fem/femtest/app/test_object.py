@@ -251,6 +251,7 @@ class TestObjectType(unittest.TestCase):
         self.assertEqual(
             "Fem::ExplorationSweep", type_of_obj(ObjectsFem.makeExplorationSweep(doc))
         )
+        self.assertEqual("Fem::ExplorationDOE", type_of_obj(ObjectsFem.makeExplorationDOE(doc)))
         self.assertEqual("Fem::ElementFluid1D", type_of_obj(ObjectsFem.makeElementFluid1D(doc)))
         self.assertEqual(
             "Fem::ElementGeometry1D", type_of_obj(ObjectsFem.makeElementGeometry1D(doc))
@@ -469,6 +470,7 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(
             is_of_type(ObjectsFem.makeExplorationSweep(doc), "Fem::ExplorationSweep")
         )
+        self.assertTrue(is_of_type(ObjectsFem.makeExplorationDOE(doc), "Fem::ExplorationDOE"))
         self.assertTrue(is_of_type(ObjectsFem.makeElementFluid1D(doc), "Fem::ElementFluid1D"))
         self.assertTrue(is_of_type(ObjectsFem.makeElementGeometry1D(doc), "Fem::ElementGeometry1D"))
         self.assertTrue(is_of_type(ObjectsFem.makeElementGeometry2D(doc), "Fem::ElementGeometry2D"))
@@ -819,6 +821,12 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_derived_from(exploration_sweep, "Fem::FeaturePython"))
         self.assertTrue(is_derived_from(exploration_sweep, "Fem::ExplorationSweep"))
 
+        # ExplorationDOE
+        exploration_doe = ObjectsFem.makeExplorationDOE(doc)
+        self.assertTrue(is_derived_from(exploration_doe, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(exploration_doe, "Fem::FeaturePython"))
+        self.assertTrue(is_derived_from(exploration_doe, "Fem::ExplorationDOE"))
+
         # ElementFluid1D
         fluid1d = ObjectsFem.makeElementFluid1D(doc)
         self.assertTrue(is_derived_from(fluid1d, "App::DocumentObject"))
@@ -1165,6 +1173,7 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(
             ObjectsFem.makeExplorationSweep(doc).isDerivedFrom("Fem::FeaturePython")
         )
+        self.assertTrue(ObjectsFem.makeExplorationDOE(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementFluid1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementGeometry1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementGeometry2D(doc).isDerivedFrom("Fem::FeaturePython"))
@@ -1329,6 +1338,7 @@ def create_all_fem_objects_doc(doc):
     param_set.addObject(ObjectsFem.makeExplorationOutput(doc))
     sweep = analysis.addObject(ObjectsFem.makeExplorationSweep(doc))[0]
     sweep.addObject(ObjectsFem.makeExplorationDesignPoints(doc))
+    analysis.addObject(ObjectsFem.makeExplorationDOE(doc))
 
     analysis.addObject(ObjectsFem.makeElementFluid1D(doc))
     analysis.addObject(ObjectsFem.makeElementGeometry1D(doc))

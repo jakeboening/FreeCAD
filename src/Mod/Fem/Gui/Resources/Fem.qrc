@@ -50,6 +50,9 @@
         <file>icons/FEM_ExplorationPromoteParameter.svg</file>
         <file>icons/FEM_ExplorationSweep.svg</file>
         <file>icons/FEM_ExplorationRun.svg</file>
+        <file>icons/FEM_ExplorationDOE.svg</file>
+        <file>icons/FEM_ExplorationCorrelation.svg</file>
+        <file>icons/FEM_ExplorationSensitivity.svg</file>
         <file>icons/FEM_EquationDeformation.svg</file>
         <file>icons/FEM_EquationElasticity.svg</file>
         <file>icons/FEM_EquationElectricforce.svg</file>

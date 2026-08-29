@@ -219,6 +219,7 @@ SET(FemObjects_SRCS
     femobjects/element_rotation1D.py
     femobjects/exploration_base.py
     femobjects/exploration_designpoints.py
+    femobjects/exploration_doe.py
     femobjects/exploration_input.py
     femobjects/exploration_output.py
     femobjects/exploration_parameters.py
@@ -607,6 +608,7 @@ SET(FemExploration_SRCS
     femexploration/model.py
     femexploration/planner.py
     femexploration/spec.py
+    femexploration/stats.py
     femexploration/store.py
     femexploration/version.py
     femexploration/worker.py
@@ -759,6 +761,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_exploration_input.py
     femtaskpanels/task_exploration_output.py
     femtaskpanels/task_exploration_parameters.py
+    femtaskpanels/task_exploration_doe.py
     femtaskpanels/task_exploration_sweep.py
     femtaskpanels/task_material_common.py
     femtaskpanels/task_material_reinforced.py
@@ -800,6 +803,7 @@ SET(FemGuiUtils_SRCS
     femguiutils/__init__.py
     femguiutils/disambiguate_solid_selection.py
     femguiutils/exploration_promote.py
+    femguiutils/exploration_charts.py
     femguiutils/exploration_designpoints.py
     femguiutils/exploration_table_model.py
     femguiutils/migrate_gui.py
@@ -844,6 +848,7 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_exploration_input.py
     femviewprovider/view_exploration_output.py
     femviewprovider/view_exploration_parameters.py
+    femviewprovider/view_exploration_doe.py
     femviewprovider/view_exploration_sweep.py
     femviewprovider/view_material_common.py
     femviewprovider/view_material_mechanicalnonlinear.py

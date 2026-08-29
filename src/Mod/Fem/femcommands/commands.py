@@ -1424,6 +1424,68 @@ class _ExplorationSweep(CommandManager):
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
 
 
+class _ExplorationDOE(CommandManager):
+    "The FEM_ExplorationDOE command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationDOE", "Design of Experiments")
+        self.accel = "D, E"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationDOE",
+            "Creates a design of experiments sampling the analysis design variables",
+        )
+        self.is_active = "with_analysis"
+
+    def Activated(self):
+        import FemGui
+
+        from femtools import explorationutils
+
+        analysis = FemGui.getActiveAnalysis()
+        param_set = explorationutils.get_parameter_set(analysis)
+        if param_set is None or not explorationutils.get_inputs(param_set):
+            FreeCAD.Console.PrintError(
+                "Add at least one design variable before creating a design of "
+                "experiments. Select an object and use Add Design Variable.\n"
+            )
+            return
+
+        FreeCAD.ActiveDocument.openTransaction("Create Fem ExplorationDOE")
+        FreeCADGui.addModule("ObjectsFem")
+        FreeCADGui.addModule("FemGui")
+        FreeCADGui.doCommand("obj = ObjectsFem.makeExplorationDOE(FreeCAD.ActiveDocument)")
+        FreeCADGui.doCommand(
+            f"obj.ParameterSet = FreeCAD.ActiveDocument.getObject('{param_set.Name}')"
+        )
+        FreeCADGui.doCommand("FemGui.getActiveAnalysis().addObject(obj)")
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
+
+
+class _ExplorationChart(CommandManager):
+    """A chart over the selected study's design points."""
+
+    def __init__(self, chart):
+        super().__init__()
+        from femguiutils import exploration_charts
+
+        self.chart = chart
+        info = exploration_charts.CHARTS[chart]
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationChart", info.title)
+        self.tooltip = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationChart", info.tooltip)
+        self.pixmap = info.icon
+        self.is_active = "with_analysis"
+
+    def Activated(self):
+        from femguiutils import exploration_charts
+
+        try:
+            exploration_charts.show_chart(self.chart)
+        except Exception as exc:
+            FreeCAD.Console.PrintError(f"{self.menutext}: {exc}\n")
+
+
 class _ExplorationRun(CommandManager):
     "The FEM_ExplorationRun command definition"
 
@@ -1665,7 +1727,10 @@ FreeCADGui.addCommand("FEM_Examples", _Examples())
 FreeCADGui.addCommand("FEM_ExplorationParameters", _ExplorationParameters())
 FreeCADGui.addCommand("FEM_ExplorationPromoteParameter", _ExplorationPromoteParameter())
 FreeCADGui.addCommand("FEM_ExplorationSweep", _ExplorationSweep())
+FreeCADGui.addCommand("FEM_ExplorationDOE", _ExplorationDOE())
 FreeCADGui.addCommand("FEM_ExplorationRun", _ExplorationRun())
+FreeCADGui.addCommand("FEM_ExplorationCorrelation", _ExplorationChart("Correlation"))
+FreeCADGui.addCommand("FEM_ExplorationSensitivity", _ExplorationChart("Sensitivity"))
 FreeCADGui.addCommand("FEM_MaterialEditor", _MaterialEditor())
 FreeCADGui.addCommand("FEM_MaterialFluid", _MaterialFluid())
 FreeCADGui.addCommand("FEM_MaterialMechanicalNonlinear", _MaterialMechanicalNonlinear())

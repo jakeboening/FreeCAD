@@ -948,6 +948,278 @@ class TestExplicitPlanner(unittest.TestCase):
         self.assertEqual(len(planner.make_planner(_demo_spec()).initial_batch()), 9)
 
 
+class TestSampling(unittest.TestCase):
+    """The design of experiments plans, in the unit cube and decoded."""
+
+    def setUp(self):
+        self.vars = [
+            Variable(name=f"v{i}", lower=10.0, upper=20.0, nominal=15.0, level_count=3)
+            for i in range(3)
+        ]
+
+    def _plan(self, name, **kw):
+        from femexploration.algorithms import sampling
+
+        return sampling.build_plan(name, self.vars, **kw)
+
+    def test_plan_sizes(self):
+        from femexploration.algorithms import sampling
+
+        expected = {
+            "FullFactorial": 27,
+            "OneAtATime": 7,
+            "LatinHypercube": 8,
+            "Sobol": 8,
+            "RandomUniform": 8,
+            "CentralComposite": 15,
+            "BoxBehnken": 13,
+        }
+        for name, size in expected.items():
+            plan = self._plan(name, count=8)
+            self.assertEqual(len(plan), size, name)
+            self.assertEqual(sampling.plan_size(name, self.vars, 8), size, name)
+
+    def test_every_point_stays_inside_the_bounds(self):
+        for name in ("LatinHypercube", "Sobol", "RandomUniform", "CentralComposite", "BoxBehnken"):
+            for point in self._plan(name, count=16, alpha="Rotatable"):
+                for var in self.vars:
+                    self.assertGreaterEqual(point[var.name], var.lower - 1e-12, name)
+                    self.assertLessEqual(point[var.name], var.upper + 1e-12, name)
+
+    def test_latin_hypercube_is_stratified(self):
+        """Exactly one point per stratum in every one-dimensional projection."""
+        n = 12
+        plan = self._plan("LatinHypercube", count=n, seed=5)
+        for var in self.vars:
+            strata = sorted(int((p[var.name] - var.lower) / (var.upper - var.lower) * n) for p in plan)
+            strata = [min(s, n - 1) for s in strata]
+            self.assertEqual(strata, list(range(n)), var.name)
+
+    def test_a_seed_reproduces_and_changes(self):
+        a = self._plan("LatinHypercube", count=6, seed=3)
+        b = self._plan("LatinHypercube", count=6, seed=3)
+        c = self._plan("LatinHypercube", count=6, seed=4)
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, c)
+
+    def test_adding_a_variable_keeps_the_earlier_columns(self):
+        """Per-variable random streams: the first variables' samples do not
+        move when a third is added.  Holds for the stratified and random
+        designs; maximin swapping of a Latin hypercube necessarily couples
+        columns, so it is checked on the raw hypercube."""
+        from femexploration.algorithms import sampling
+
+        two = sampling.random_uniform(self.vars[:2], 8, seed=11)
+        three = sampling.random_uniform(self.vars, 8, seed=11)
+        for p2, p3 in zip(two, three):
+            self.assertEqual(p2["v0"], p3["v0"])
+            self.assertEqual(p2["v1"], p3["v1"])
+
+        import numpy as np
+
+        raw2 = sampling.unit_latin_hypercube(8, 2, np.random.default_rng(11), maximin_iterations=0)
+        raw3 = sampling.unit_latin_hypercube(8, 3, np.random.default_rng(11), maximin_iterations=0)
+        self.assertTrue(np.allclose(raw2, raw3[:, :2]))
+
+    def test_the_implementation_is_reported(self):
+        from femexploration.algorithms import sampling
+
+        _plan, impl = sampling.build_plan_with_impl("Sobol", self.vars, count=8)
+        try:
+            import scipy.stats.qmc  # noqa: F401
+
+            self.assertEqual(impl, "scipy.stats.qmc.Sobol")
+        except ImportError:
+            self.assertIn("scipy not available", impl)
+        _plan, impl = sampling.build_plan_with_impl("LatinHypercube", self.vars, count=8)
+        self.assertIn("LatinHypercube", impl)
+
+    def test_central_composite_axial_points(self):
+        face = self._plan("CentralComposite")
+        centre = {v.name: 15.0 for v in self.vars}
+        self.assertIn(centre, face)
+        # face centred: axial points sit on the bounds
+        axial = [p for p in face if sum(1 for v in self.vars if p[v.name] != 15.0) == 1]
+        self.assertEqual(len(axial), 6)
+        for p in axial:
+            self.assertIn(next(p[v.name] for v in self.vars if p[v.name] != 15.0), (10.0, 20.0))
+
+    def test_box_behnken_needs_three_variables(self):
+        from femexploration.algorithms import sampling
+
+        with self.assertRaises(ValueError):
+            sampling.box_behnken(self.vars[:2])
+        plan = sampling.box_behnken(self.vars)
+        # never a corner: at most two variables off centre
+        for p in plan:
+            self.assertLessEqual(sum(1 for v in self.vars if p[v.name] != 15.0), 2)
+
+    def test_the_planner_records_the_implementation(self):
+        from femexploration import planner
+
+        spec = _demo_spec()
+        spec.study_type = "DOE"
+        spec.method = {"plan": "LatinHypercube", "point_count": 7}
+        made = planner.make_planner(spec)
+        self.assertEqual(len(made.initial_batch()), 7)
+        self.assertIn("LatinHypercube", made.implementation)
+
+
+class TestStats(unittest.TestCase):
+    """Correlation and sensitivity, with no FreeCAD."""
+
+    def _rows(self, n=12):
+        rows = []
+        for i in range(n):
+            a = float(i)
+            b = float((i * 7) % n)
+            rows.append({
+                "state": "completed",
+                "inputs": {"a": [a, "mm"], "b": [b, "mm"]},
+                "outputs": {"y": 2.0 * a + b, "z": -a, "_mesh_nodes": 100.0},
+            })
+        rows.append({"state": "solve_failed", "inputs": {"a": [99.0, "mm"], "b": [99.0, "mm"]}, "outputs": {}})
+        return rows
+
+    def test_failed_rows_are_left_out(self):
+        from femexploration import stats
+
+        x, y, kept = stats.table_arrays(self._rows(), ["a", "b"], ["y"])
+        self.assertEqual(x.shape, (12, 2))
+        self.assertEqual(y.shape, (12, 1))
+        self.assertNotIn(12, kept)
+
+    def test_pearson_of_a_linear_relation_is_one(self):
+        from femexploration import stats
+
+        keys, matrix = stats.correlation_matrix(self._rows(), ["a", "b"], ["y", "z"])
+        self.assertEqual(keys, ["a", "b", "y", "z"])
+        self.assertAlmostEqual(matrix[0, 3], -1.0)
+        self.assertAlmostEqual(matrix[0, 0], 1.0)
+
+    def test_a_constant_column_is_zero_not_nan(self):
+        import numpy as np
+
+        from femexploration import stats
+
+        matrix = stats.pearson(np.array([[1.0, 5.0], [2.0, 5.0], [3.0, 5.0]]))
+        self.assertEqual(matrix[0, 1], 0.0)
+        self.assertFalse(np.isnan(matrix).any())
+
+    def test_spearman_sees_a_monotone_relation(self):
+        import numpy as np
+
+        from femexploration import stats
+
+        x = np.arange(1, 11, dtype=float)
+        data = np.column_stack([x, np.exp(x)])
+        self.assertAlmostEqual(stats.spearman(data)[0, 1], 1.0)
+        self.assertLess(stats.pearson(data)[0, 1], 0.9)
+
+    def test_sensitivity_recovers_the_coefficients(self):
+        from femexploration import stats
+
+        table = stats.sensitivity_table(self._rows(), ["a", "b"], ["y", "z"])
+        y = table["y"]
+        self.assertAlmostEqual(y["r2"], 1.0, places=6)
+        # standardised: a's effect is twice b's, both positive
+        self.assertGreater(y["coefficients"]["b"], 0)
+        self.assertGreater(y["coefficients"]["a"], y["coefficients"]["b"])
+        self.assertAlmostEqual(y["coefficients"]["a"] / y["coefficients"]["b"], 2.0, places=3)
+        self.assertLess(table["z"]["coefficients"]["a"], 0)
+        self.assertAlmostEqual(table["z"]["coefficients"]["b"], 0.0, places=6)
+
+    def test_mesh_noise_is_flagged(self):
+        from femexploration import stats
+
+        rows = self._rows()
+        for i, row in enumerate(rows):
+            if row["state"] == "completed":
+                row["outputs"]["_mesh_nodes"] = 100.0 + i
+        flagged = stats.mesh_convergence_warning(rows, ["y", "z"])
+        self.assertIn("y", flagged)
+        # constant node count: nothing to flag
+        self.assertEqual(stats.mesh_convergence_warning(self._rows(), ["y"]), {})
+
+
+try:
+    import matplotlib as _mpl
+
+    _mpl.use("Agg")
+except ImportError:  # pragma: no cover
+    _mpl = None
+
+
+@unittest.skipIf(_mpl is None, "requires matplotlib")
+class TestCharts(unittest.TestCase):
+    """The drawing functions, on an off-screen figure."""
+
+    def _data(self):
+        from types import SimpleNamespace
+
+        from femguiutils import exploration_charts as charts
+
+        def Column(key, label, unit, role):
+            # the chart only reads these four; the Qt table's Column class
+            # would drag PySide into a test that needs none of it
+            return SimpleNamespace(key=key, label=label, unit=unit, role=role)
+
+        rows = []
+        for i in range(10):
+            rows.append({
+                "state": "completed",
+                "inputs": {"Input": [float(i), "mm"], "Input001": [float((i * 3) % 10), "mm"]},
+                "outputs": {"Volume": 3.0 * i + ((i * 3) % 10), "_mesh_nodes": 50.0},
+            })
+        columns = [
+            Column("Input", "Width", "mm", "input"),
+            Column("Input001", "Height", "mm", "input"),
+            Column("Volume", "Volume", "mm^3", "response"),
+        ]
+        return charts.chart_data(rows, columns, "Sweep")
+
+    def test_chart_data_sorts_columns_by_role(self):
+        data = self._data()
+        self.assertEqual(data.inputs, ["Input", "Input001"])
+        self.assertEqual(data.outputs, ["Volume"])
+        self.assertEqual(data.label("Input"), "Width")
+
+    def test_correlation_draws_a_labelled_matrix(self):
+        from matplotlib.figure import Figure
+
+        from femguiutils import exploration_charts as charts
+
+        axes = charts.draw_correlation(Figure(), self._data())
+        self.assertEqual([t.get_text() for t in axes.get_xticklabels()], ["Width", "Height", "Volume"])
+        self.assertEqual(len(axes.images), 1)
+
+    def test_sensitivity_draws_one_panel_per_output(self):
+        from matplotlib.figure import Figure
+
+        from femguiutils import exploration_charts as charts
+
+        axes = charts.draw_sensitivity(Figure(), self._data())
+        self.assertEqual(len(axes), 1)
+        self.assertEqual(len(axes[0].patches), 2)
+        self.assertIn("R² = 1.00", axes[0].get_title())
+
+    def test_too_few_points_is_refused_with_a_reason(self):
+        from matplotlib.figure import Figure
+
+        from femguiutils import exploration_charts as charts
+
+        data = self._data()
+        data.rows = data.rows[:2]
+        with self.assertRaises(ValueError) as caught:
+            charts.draw_correlation(Figure(), data)
+        self.assertIn("completed design points", str(caught.exception))
+
+    def test_the_registry_has_both_charts(self):
+        from femguiutils import exploration_charts as charts
+
+        self.assertEqual(set(charts.CHARTS) >= {"Correlation", "Sensitivity"}, True)
+
+
 try:
     from PySide import QtCore as _QtCore
 except ImportError:
@@ -1322,6 +1594,94 @@ class TestWorker(unittest.TestCase):
 
 
 @needs_freecad
+class TestExplorationDOE(unittest.TestCase):
+    """The design of experiments study object, end to end."""
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.tmp = tempfile.mkdtemp(prefix="fem_expl_doe_")
+        self.doc = FreeCAD.newDocument("TestExplorationDOE")
+        box = self.doc.addObject("Part::Box", "Box")
+        box.Length, box.Width, box.Height = 8000, 1000, 1000
+        self.doc.recompute()
+        analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height"):
+            var = explorationpromote.promote(box, prop, analysis)
+            var.Lower, var.Upper = 500.0, 1500.0
+        pset = explorationutils.get_parameter_set(analysis)
+        out = ObjectsFem.makeExplorationOutput(self.doc, "Volume")
+        out.Source = model.EXPRESSION
+        out.Expression = "Box.Shape.Volume"
+        pset.addObject(out)
+        self.doe = ObjectsFem.makeExplorationDOE(self.doc, "DOE")
+        self.doe.ParameterSet = pset
+        self.doe.Plan = "LatinHypercube"
+        self.doe.PointCount = 5
+        self.doe.Seed = 7
+        analysis.addObject(self.doe)
+        self.doc.recompute()
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_type_and_spec(self):
+        from femexploration import api
+        from femtools import explorationutils
+
+        self.assertEqual(self.doe.Proxy.Type, explorationutils.DOE_TYPE)
+        self.assertTrue(explorationutils.is_exploration_study(self.doe))
+        spec = api.study_spec(self.doe)
+        self.assertEqual(spec.study_type, "DOE")
+        self.assertEqual(spec.method["plan"], "LatinHypercube")
+        self.assertEqual(spec.method["point_count"], 5)
+        self.assertEqual(spec.method["alpha"], "FaceCentred")
+        self.assertEqual(spec.seed, 7)
+
+    def test_a_latin_hypercube_runs_and_records_its_sampler(self):
+        import json
+
+        from femexploration import api
+
+        run_dir = os.path.join(self.tmp, "run")
+        result = api.run_study(self.doe, run_dir=run_dir)
+        self.assertEqual(len(result.completed), 5)
+        with open(os.path.join(run_dir, "study.json")) as fh:
+            study = json.load(fh)
+        self.assertIn("LatinHypercube", study["provenance"]["sampler_impl"])
+        # reproducible: the same seed re-uses every point
+        again = api.run_study(self.doe, run_dir=run_dir)
+        self.assertEqual({r.point_id for r in again.completed}, {r.point_id for r in result.completed})
+
+    def test_a_classical_design_ignores_the_count(self):
+        from femexploration import api
+
+        self.doe.Plan = "CentralComposite"
+        self.doc.recompute()
+        result = api.run_study(self.doe, run_dir=os.path.join(self.tmp, "ccd"))
+        self.assertEqual(len(result.completed), 2**2 + 2 * 2 + 1)
+
+    def test_settings_survive_save_and_reopen(self):
+        path = os.path.join(self.tmp, "doe.FCStd")
+        self.doe.Plan = "Sobol"
+        self.doe.PointCount = 9
+        self.doc.saveAs(path)
+        name = self.doc.Name
+        self.FreeCAD.closeDocument(name)
+        self.doc = self.FreeCAD.openDocument(path)
+        doe = self.doc.getObject("DOE")
+        self.assertEqual(doe.Plan, "Sobol")
+        self.assertEqual(doe.PointCount, 9)
+        self.assertEqual(doe.Proxy.Type, "Fem::ExplorationDOE")
+
+
+@needs_freecad
 class TestLocalParallelBackend(unittest.TestCase):
     """Several FreeCADCmd workers on this machine."""
 
@@ -1461,6 +1821,63 @@ class TestLocalParallelBackend(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertFalse(any(left), f"processes survived: {left}")
+
+
+@needs_freecad
+@unittest.skipUnless(_FreeCAD is not None and _FreeCAD.GuiUp, "requires a GUI session")
+class TestDOEPanel(unittest.TestCase):
+    """The design of experiments panel previews the plan it will run."""
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.doc = FreeCAD.newDocument("TestDOEPanel")
+        box = self.doc.addObject("Part::Box", "Box")
+        self.doc.recompute()
+        analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height", "Length"):
+            explorationpromote.promote(box, prop, analysis)
+        self.doc.recompute()
+        pset = explorationutils.get_parameter_set(analysis)
+        out = ObjectsFem.makeExplorationOutput(self.doc, "Volume")
+        out.Source = model.EXPRESSION
+        out.Expression = "Box.Shape.Volume"
+        pset.addObject(out)
+        self.doe = ObjectsFem.makeExplorationDOE(self.doc, "DOE")
+        self.doe.ParameterSet = pset
+        self.doe.PointCount = 12
+        analysis.addObject(self.doe)
+        self.doc.recompute()
+
+        from femtaskpanels import task_exploration_doe
+
+        self.panel = task_exploration_doe._TaskPanel(self.doe)
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+
+    def test_the_preview_follows_the_plan(self):
+        self.panel.plan.setCurrentText("LatinHypercube")
+        self.assertIn("12 design points", self.panel.preview.text())
+        self.assertEqual(self.panel.table.rowCount(), 12)
+        self.panel.plan.setCurrentText("BoxBehnken")
+        self.assertIn("13 design points", self.panel.preview.text())
+        self.assertFalse(self.panel.count.isEnabled())
+        self.panel.plan.setCurrentText("CentralComposite")
+        self.assertIn("15 design points", self.panel.preview.text())
+        self.assertTrue(self.panel.alpha.isEnabled())
+
+    def test_the_count_is_written_back(self):
+        self.panel.plan.setCurrentText("Sobol")
+        self.panel.count.setValue(9)
+        self.panel.set_object_params()
+        self.assertEqual(self.doe.Plan, "Sobol")
+        self.assertEqual(self.doe.PointCount, 9)
 
 
 @needs_freecad
