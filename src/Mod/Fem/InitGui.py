@@ -72,6 +72,10 @@ class FemWorkbench(Workbench):
         import Fem
         import FemGui
         import femcommands.commands
+
+        # solvers registered by add-ons need a command of their own; the ones
+        # shipped with FreeCAD already have hand written ones and are skipped
+        femcommands.commands.setup_solver_commands()
         import fempreferencepages
 
         FreeCADGui.addPreferencePage(fempreferencepages.DlgSettingsNetgen, "FEM")

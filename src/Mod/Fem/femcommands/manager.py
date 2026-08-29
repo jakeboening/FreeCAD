@@ -125,6 +125,12 @@ class CommandManager:
                 and self.active_analysis_in_active_doc()
                 and self.solver_elmer_selected()
             )
+        elif self.is_active == "with_promotable_selection":
+            active = (
+                FemGui.getActiveAnalysis() is not None
+                and self.active_analysis_in_active_doc()
+                and self.promotable_selected()
+            )
         elif self.is_active == "with_analysis_without_solver":
             active = (
                 FemGui.getActiveAnalysis() is not None
@@ -267,12 +273,36 @@ class CommandManager:
             return False
 
     def solver_elmer_selected(self):
+        """A selected solver that owns equation objects.
+
+        Named for Elmer because that is the only such solver shipped, but the
+        question asked is about a declared capability, so another solver with
+        equations gets the equation commands without touching this file.
+        """
         sel = FreeCADGui.Selection.getSelection()
-        if len(sel) == 1 and is_of_type(sel[0], "Fem::SolverElmer"):
-            self.selobj = sel[0]
-            return True
-        else:
+        if len(sel) != 1:
             return False
+
+        from femsolver import registry
+
+        plugin = registry.get_solver_for(sel[0])
+        if plugin is None or not plugin.has(registry.CAP_EQUATIONS):
+            return False
+        self.selobj = sel[0]
+        return True
+
+    def promotable_selected(self):
+        """One object selected that has at least one property a sweep could drive."""
+        sel = FreeCADGui.Selection.getSelection()
+        if len(sel) != 1:
+            return False
+
+        from femtools import explorationpromote
+
+        if not explorationpromote.promotable_properties(sel[0]):
+            return False
+        self.selobj = sel[0]
+        return True
 
     def analysis_has_solver(self):
         solver = False

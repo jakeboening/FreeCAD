@@ -217,6 +217,12 @@ SET(FemObjects_SRCS
     femobjects/element_geometry1D.py
     femobjects/element_geometry2D.py
     femobjects/element_rotation1D.py
+    femobjects/exploration_base.py
+    femobjects/exploration_designpoints.py
+    femobjects/exploration_input.py
+    femobjects/exploration_output.py
+    femobjects/exploration_parameters.py
+    femobjects/exploration_sweep.py
     femobjects/material_common.py
     femobjects/material_mechanicalnonlinear.py
     femobjects/material_reinforced.py
@@ -261,6 +267,7 @@ SET(FemResult_SRCS
 SET(FemSolver_SRCS
     femsolver/__init__.py
     femsolver/equationbase.py
+    femsolver/registry.py
     femsolver/report.py
     femsolver/reportdialog.py
     femsolver/run.py
@@ -397,6 +404,7 @@ SET(FemTestsApp_SRCS
     femtest/app/test_solver_mystran.py
     femtest/app/test_solver_z88.py
     femtest/app/test_gmsh.py
+    femtest/app/test_exploration.py
 )
 
 SET(FemTestsFiles_SRCS
@@ -587,12 +595,40 @@ SET(FemTestsZ88Ccxcantinl_SRCS
     femtest/data/z88/ccx_cantilever_nodeload/z88mat.txt
 )
 
+SET(FemExploration_SRCS
+    femexploration/__init__.py
+    femexploration/api.py
+    femexploration/cancel.py
+    femexploration/cli.py
+    femexploration/engine.py
+    femexploration/evaluate.py
+    femexploration/hashing.py
+    femexploration/model.py
+    femexploration/planner.py
+    femexploration/spec.py
+    femexploration/store.py
+    femexploration/version.py
+)
+
+SET(FemExplorationBackends_SRCS
+    femexploration/backends/__init__.py
+    femexploration/backends/base.py
+    femexploration/backends/serial.py
+)
+
+SET(FemExplorationAlgorithms_SRCS
+    femexploration/algorithms/__init__.py
+    femexploration/algorithms/sampling.py
+)
+
 SET(FemTools_SRCS
     femtools/__init__.py
     femtools/ccxtools.py
     femtools/checksanalysis.py
     femtools/constants.py
     femtools/errors.py
+    femtools/explorationpromote.py
+    femtools/explorationutils.py
     femtools/femutils.py
     femtools/geomtools.py
     femtools/membertools.py
@@ -603,6 +639,9 @@ SET(FemTools_SRCS
 
 SET(FemAllScripts
     ${FemBaseModules_SRCS}
+    ${FemExploration_SRCS}
+    ${FemExplorationBackends_SRCS}
+    ${FemExplorationAlgorithms_SRCS}
     ${FemCommands_SRCS}
     ${FemExamples_SRCS}
     ${FemExampleMeshes_SRCS}
@@ -645,6 +684,9 @@ fc_copy_sources(FemScriptsTarget "${CMAKE_BINARY_DIR}/Mod/Fem" ${FemAllScripts})
 INSTALL(FILES ${FemBaseModules_SRCS} DESTINATION Mod/Fem)
 INSTALL(FILES ${FemCommands_SRCS} DESTINATION Mod/Fem/femcommands)
 INSTALL(FILES ${FemExamples_SRCS} DESTINATION Mod/Fem/femexamples)
+INSTALL(FILES ${FemExploration_SRCS} DESTINATION Mod/Fem/femexploration)
+INSTALL(FILES ${FemExplorationBackends_SRCS} DESTINATION Mod/Fem/femexploration/backends)
+INSTALL(FILES ${FemExplorationAlgorithms_SRCS} DESTINATION Mod/Fem/femexploration/algorithms)
 INSTALL(FILES ${FemExampleMeshes_SRCS} DESTINATION Mod/Fem/femexamples/meshes)
 INSTALL(FILES ${FemInOut_SRCS} DESTINATION Mod/Fem/feminout)
 INSTALL(FILES ${FemMesh_SRCS} DESTINATION Mod/Fem/femmesh)
@@ -709,6 +751,11 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_element_geometry1D.py
     femtaskpanels/task_element_geometry2D.py
     femtaskpanels/task_element_rotation1D.py
+    femtaskpanels/task_exploration_designpoints.py
+    femtaskpanels/task_exploration_input.py
+    femtaskpanels/task_exploration_output.py
+    femtaskpanels/task_exploration_parameters.py
+    femtaskpanels/task_exploration_sweep.py
     femtaskpanels/task_material_common.py
     femtaskpanels/task_material_reinforced.py
     femtaskpanels/task_mesh_boundarylayer.py
@@ -748,6 +795,8 @@ SET(FemGuiTests_SRCS
 SET(FemGuiUtils_SRCS
     femguiutils/__init__.py
     femguiutils/disambiguate_solid_selection.py
+    femguiutils/exploration_promote.py
+    femguiutils/exploration_table_model.py
     femguiutils/migrate_gui.py
     femguiutils/selection_widgets.py
 )
@@ -786,6 +835,11 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_element_geometry1D.py
     femviewprovider/view_element_geometry2D.py
     femviewprovider/view_element_rotation1D.py
+    femviewprovider/view_exploration_designpoints.py
+    femviewprovider/view_exploration_input.py
+    femviewprovider/view_exploration_output.py
+    femviewprovider/view_exploration_parameters.py
+    femviewprovider/view_exploration_sweep.py
     femviewprovider/view_material_common.py
     femviewprovider/view_material_mechanicalnonlinear.py
     femviewprovider/view_material_reinforced.py

@@ -67,6 +67,8 @@ using namespace FemGui;
     //
     qApp->translate("Workbench", "Solve");
     qApp->translate("Workbench", "&Solve");
+    qApp->translate("Workbench", "Design Exploration");
+    qApp->translate("Workbench", "&Design Exploration");
     //
     qApp->translate("Workbench", "Results");
     qApp->translate("Workbench", "&Results");
@@ -174,6 +176,13 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
            << "Separator"
            << "FEM_SolverControl"
            << "FEM_SolverRun";
+
+    Gui::ToolBarItem* exploration = new Gui::ToolBarItem(root);
+    exploration->setCommand("Design Exploration");
+    *exploration << "FEM_ExplorationPromoteParameter"
+                 << "FEM_ExplorationParameters"
+                 << "Separator"
+                 << "FEM_ExplorationSweep";
 
     Gui::ToolBarItem* results = new Gui::ToolBarItem(root);
     results->setCommand("Results");
@@ -326,6 +335,14 @@ Gui::MenuItem* Workbench::setupMenuBar() const
            << "Separator"
            << "FEM_SolverControl"
            << "FEM_SolverRun";
+
+    Gui::MenuItem* exploration = new Gui::MenuItem;
+    root->insertItem(item, exploration);
+    exploration->setCommand("&Design Exploration");
+    *exploration << "FEM_ExplorationPromoteParameter"
+                 << "FEM_ExplorationParameters"
+                 << "Separator"
+                 << "FEM_ExplorationSweep";
 
     Gui::MenuItem* results = new Gui::MenuItem;
     root->insertItem(item, results);

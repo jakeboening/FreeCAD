@@ -39,6 +39,14 @@ from femtest.app.test_solver_elmer import TestSolverElmer as FemTest13
 from femtest.app.test_solver_z88 import TestSolverZ88 as FemTest14
 from femtest.app.test_gmsh import TestGMSHTransfinite as FemTest15
 from femtest.app.test_gmsh import TestGMSHRefinements as FemTest16
+from femtest.app.test_exploration import TestExplorationSchema as FemTest17
+from femtest.app.test_exploration import TestExplorationHashing as FemTest18
+from femtest.app.test_exploration import TestExplorationObjects as FemTest19
+from femtest.app.test_exploration import TestExplorationPromote as FemTest20
+from femtest.app.test_exploration import TestExplorationEngine as FemTest21
+from femtest.app.test_exploration import TestSolverRegistry as FemTest22
+from femtest.app.test_exploration import TestExplorationResultCompleteness as FemTest23
+from femtest.app.test_exploration import TestSweepPanelOutput as FemTest24
 
 # dummy usage to get flake8 and lgtm quiet
 False if FemTest01.__name__ else True
@@ -56,3 +64,11 @@ False if FemTest13.__name__ else True
 False if FemTest14.__name__ else True
 False if FemTest15.__name__ else True
 False if FemTest16.__name__ else True
+False if FemTest17.__name__ else True
+False if FemTest18.__name__ else True
+False if FemTest19.__name__ else True
+False if FemTest20.__name__ else True
+False if FemTest21.__name__ else True
+False if FemTest22.__name__ else True
+False if FemTest23.__name__ else True
+False if FemTest24.__name__ else True

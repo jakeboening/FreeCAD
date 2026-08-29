@@ -66,10 +66,13 @@ class MeshSetsGetter:
                 )
                 # ATM only used in meshtools.get_femelement_direction1D_set
                 # TODO somehow this is not smart, pur mesh objects might be used often
-                if self.member.geos_beamsection and (
-                    type_of_obj(self.solver_obj) == "Fem::SolverCcxTools"
-                    or type_of_obj(self.solver_obj) == "Fem::SolverCalculiX"
-                ):
+                from femsolver import registry
+
+                plugin = registry.get_solver_for(self.solver_obj)
+                needs_shape = plugin is not None and plugin.has(
+                    registry.CAP_NEEDS_SHAPE_FOR_BEAMS
+                )
+                if self.member.geos_beamsection and needs_shape:
                     FreeCAD.Console.PrintError(
                         "The mesh does not know the geometry it is made from. "
                         "Beam rotations can not retrieved but they are needed "

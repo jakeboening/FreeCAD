@@ -348,6 +348,77 @@ def makeConstraintSpring(doc, name="Spring"):
     return obj
 
 
+# ********* design exploration objects ***********************************************************
+def makeExplorationParameters(doc, name="ParameterSet"):
+    """makeExplorationParameters(document, [name]):
+    creates the design exploration parameter set of an analysis"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_parameters
+
+    exploration_parameters.ExplorationParameters(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_parameters
+
+        view_exploration_parameters.VPExplorationParameters(obj.ViewObject)
+    return obj
+
+
+def makeExplorationInput(doc, name="Input"):
+    """makeExplorationInput(document, [name]):
+    creates a design exploration input parameter (a design variable)"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_input
+
+    exploration_input.ExplorationInput(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_input
+
+        view_exploration_input.VPExplorationInput(obj.ViewObject)
+    return obj
+
+
+def makeExplorationOutput(doc, name="Output"):
+    """makeExplorationOutput(document, [name]):
+    creates a design exploration output parameter (a response)"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_output
+
+    exploration_output.ExplorationOutput(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_output
+
+        view_exploration_output.VPExplorationOutput(obj.ViewObject)
+    return obj
+
+
+def makeExplorationSweep(doc, name="Sweep"):
+    """makeExplorationSweep(document, [name]):
+    creates a design exploration parametric sweep"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_sweep
+
+    exploration_sweep.ExplorationSweep(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_sweep
+
+        view_exploration_sweep.VPExplorationSweep(obj.ViewObject)
+    return obj
+
+
+def makeExplorationDesignPoints(doc, name="DesignPoints"):
+    """makeExplorationDesignPoints(document, [name]):
+    creates the design point table of a study"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_designpoints
+
+    exploration_designpoints.ExplorationDesignPoints(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_designpoints
+
+        view_exploration_designpoints.VPExplorationDesignPoints(obj.ViewObject)
+    return obj
+
+
 # ********* element definition objects ***********************************************************
 def makeElementFluid1D(doc, name="ElementFluid1D"):
     """makeElementFluid1D(document, [name]):

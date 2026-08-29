@@ -36,6 +36,21 @@ from FreeCAD import Units
 from . import femutils
 
 
+def check_member_for_solver(analysis, solver, mesh, member):
+    """Validate an analysis for whichever solver is about to run it.
+
+    Solvers differ in what they can represent, so the check belongs to the
+    solver.  A plugin that declares none falls back to the CalculiX rules,
+    which are the strictest shipped and therefore the safe default.
+    """
+    from femsolver import registry
+
+    plugin = registry.get_solver_for(solver)
+    if plugin is not None:
+        return plugin.check(analysis, solver, mesh, member)
+    return check_member_for_solver_calculix(analysis, solver, mesh, member)
+
+
 def check_member_for_solver_calculix(analysis, solver, mesh, member):
 
     message = ""

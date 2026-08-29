@@ -50,9 +50,7 @@ import FreeCAD as App
 from . import settings
 from . import signal
 from . import task
-from femsolver.elmer import elmertools
-from femsolver.calculix import calculixtools
-from femsolver.z88 import z88tools
+from femsolver import registry
 from femtools import femutils
 from femtools import membertools
 from femtools.errors import DirectoryDoesNotExistError
@@ -109,13 +107,17 @@ def run_fem_solver(solver, working_dir=None, blocking=False):
     if working_dir:
         solver.WorkingDirectory = working_dir
 
-    match solver.Proxy.Type:
-        case "Fem::SolverElmer":
-            tool = elmertools.ElmerTools(solver)
-        case "Fem::SolverCalculiX":
-            tool = calculixtools.CalculiXTools(solver)
-        case "Fem::SolverZ88":
-            tool = z88tools.Z88Tools(solver)
+    # which tools class runs this solver is the registry's business, so a
+    # solver that is not shipped with FreeCAD reaches exactly this path
+    plugin = registry.get_solver_for(solver)
+    if plugin is not None:
+        try:
+            tool = plugin.make_tools(solver)
+        except Exception as e:
+            App.Console.PrintError(
+                f"Cannot start solver {plugin.name}: {''.join(format_exception_only(e))}"
+            )
+            return
 
     if tool is not None:
         # Redirect process error to report view

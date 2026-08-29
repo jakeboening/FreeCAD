@@ -255,6 +255,17 @@ class _SolverDlg:
         return self.param_group.GetBool(self.WRITE_COMMENTS_PARAM, True)
 
 
+def register_solver_settings(name, dialog):
+    """Add binary and core settings for a solver not shipped with FreeCAD.
+
+    Called by :func:`femsolver.registry.register_solver`, so an add-on solver
+    reaches ``get_binary`` and ``get_cores`` through exactly the machinery the
+    built-ins use rather than a parallel one of its own.
+    """
+    _SOLVER_PARAM[name] = dialog
+    return dialog
+
+
 _SOLVER_PARAM = {
     "Calculix": _SolverDlg(
         default="ccx",

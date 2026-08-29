@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="64px" height="64px" viewBox="0 0 64 64" version="1.1"
+   xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg">
+  <title>FEM_ExplorationInput</title>
+  <path d="M 8,44 H 56" stroke="#2c5aa0" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M 8,38 V 50 M 32,38 V 50 M 56,38 V 50" stroke="#2c5aa0" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="32" cy="44" r="8" fill="#5aa02c" stroke="#2c5aa0" stroke-width="3"/>
+  <path d="M 32,10 V 28 M 25,21 32,28 39,21" stroke="#d40000" stroke-width="4"
+     fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

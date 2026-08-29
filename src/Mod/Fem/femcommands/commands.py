@@ -1350,6 +1350,106 @@ class _PostFilterGlyph(CommandManager):
         self.do_activated = "add_filter_set_edit"
 
 
+class _ExplorationParameters(CommandManager):
+    "The FEM_ExplorationParameters command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationParameters", "Parameter Set")
+        self.accel = "D, P"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationParameters",
+            "Creates the design exploration parameter set of the analysis",
+        )
+        self.is_active = "with_analysis"
+        self.do_activated = "add_obj_on_gui_set_edit"
+
+    def Activated(self):
+        import FemGui
+
+        from femtools import explorationutils
+
+        analysis = FemGui.getActiveAnalysis()
+        existing = explorationutils.get_parameter_set(analysis)
+        if existing is not None:
+            # one per analysis by design; open the existing one instead of
+            # quietly creating a second that nothing would ever read
+            FreeCAD.Console.PrintMessage(
+                "This analysis already has a parameter set; opening it.\n"
+            )
+            FreeCADGui.ActiveDocument.setEdit(existing.Name)
+            return
+        super().Activated()
+
+
+class _ExplorationSweep(CommandManager):
+    "The FEM_ExplorationSweep command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationSweep", "Parametric Sweep")
+        self.accel = "D, S"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationSweep",
+            "Creates a parametric sweep over the analysis design variables",
+        )
+        self.is_active = "with_analysis"
+        self.do_activated = "add_obj_on_gui_set_edit"
+
+    def Activated(self):
+        import FemGui
+
+        from femtools import explorationutils
+
+        analysis = FemGui.getActiveAnalysis()
+        param_set = explorationutils.get_parameter_set(analysis)
+        if param_set is None or not explorationutils.get_inputs(param_set):
+            FreeCAD.Console.PrintError(
+                "Add at least one design variable before creating a sweep. "
+                "Select an object and use Add Design Variable.\n"
+            )
+            return
+
+        FreeCAD.ActiveDocument.openTransaction("Create Fem ExplorationSweep")
+        FreeCADGui.addModule("ObjectsFem")
+        FreeCADGui.addModule("FemGui")
+        FreeCADGui.doCommand(
+            "obj = ObjectsFem.makeExplorationSweep(FreeCAD.ActiveDocument)"
+        )
+        FreeCADGui.doCommand(
+            f"obj.ParameterSet = FreeCAD.ActiveDocument.getObject('{param_set.Name}')"
+        )
+        FreeCADGui.doCommand("FemGui.getActiveAnalysis().addObject(obj)")
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
+
+
+class _ExplorationPromoteParameter(CommandManager):
+    "The FEM_ExplorationPromoteParameter command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationPromoteParameter", "Add Design Variable"
+        )
+        self.accel = "D, V"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationPromoteParameter",
+            "Promotes a property of the selected object to a design variable",
+        )
+        self.is_active = "with_promotable_selection"
+
+    def Activated(self):
+        import FemGui
+
+        from femguiutils import exploration_promote
+
+        created = exploration_promote.run(self.selobj, FemGui.getActiveAnalysis())
+        if created:
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.ActiveDocument.setEdit(created[0].Name)
+
+
 class _CompSolvers(CommandManager):
     def __init__(self):
         super().__init__()
@@ -1357,15 +1457,23 @@ class _CompSolvers(CommandManager):
         self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_CompSolvers", "Solvers")
         self.tooltip = Qt.QT_TRANSLATE_NOOP("FEM_CompSolvers", "Creates a FEM solver")
         self.is_active = "with_analysis"
-        self.commands = [
-            "FEM_SolverCalculiX",
-            "FEM_SolverElmer",
-            "FEM_SolverMystran",
-            "FEM_SolverZ88",
-        ]
+
+    @property
+    def commands(self):
+        """Solver commands, from the registry rather than a fixed list.
+
+        Reading it live is what lets an add-on solver appear in the dropdown
+        alongside the built-ins instead of needing its own toolbar.
+        """
+        from femsolver import registry
+
+        available = FreeCADGui.listCommands()
+        return [name for name in registry.command_names() if name in available]
 
     def Activated(self, i):
-        FreeCADGui.runCommand(self.commands[i])
+        commands = self.commands
+        if 0 <= i < len(commands):
+            FreeCADGui.runCommand(commands[i])
 
     def GetCommands(self):
         return self.commands
@@ -1375,6 +1483,91 @@ class _CompSolvers(CommandManager):
         # DefaultSolver == 0 is "None"
         index = gen_prefs.GetInt("DefaultSolver", 0)
         return (index - 1) if index > 0 else 0
+
+
+class _RegisteredSolver:
+    """A command that creates a solver described by a registry plugin.
+
+    Generated rather than written, so an add-on registers one plugin and gets
+    its toolbar entry, menu item and macro-recordable creation line without
+    shipping a command class.  Modelled on the post-processing visualization
+    commands, including their trick of holding the module and factory as
+    strings so nothing is imported until the user actually asks for it.
+    """
+
+    def __init__(self, plugin):
+        self._type_id = plugin.type_id
+
+    @property
+    def _plugin(self):
+        from femsolver import registry
+
+        return registry.get_solver(self._type_id)
+
+    def GetResources(self):
+        plugin = self._plugin
+        command = plugin.command_name()
+        return {
+            "Pixmap": plugin.icon or "FEM_SolverStandard",
+            "MenuText": Qt.QT_TRANSLATE_NOOP(command, plugin.menu_text or plugin.name),
+            "Accel": plugin.accel,
+            "ToolTip": Qt.QT_TRANSLATE_NOOP(
+                command, plugin.tooltip or f"Creates a FEM solver {plugin.name}"
+            ),
+            "CmdType": "AlterDoc",
+        }
+
+    def IsActive(self):
+        if not FreeCAD.ActiveDocument:
+            return False
+
+        import FemGui
+
+        analysis = FemGui.getActiveAnalysis()
+        return analysis is not None and analysis.Document is FreeCAD.ActiveDocument
+
+    def Activated(self):
+        import FemGui
+
+        plugin = self._plugin
+        FreeCAD.ActiveDocument.openTransaction(f"Create {plugin.name} solver")
+        FreeCADGui.addModule(plugin.module)
+        FreeCADGui.addModule("FemGui")
+        FreeCADGui.doCommand(
+            f"obj = {plugin.module}.{plugin.factory}(FreeCAD.ActiveDocument)"
+        )
+        FreeCADGui.doCommand("FemGui.getActiveAnalysis().addObject(obj)")
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
+
+
+def _add_solver_command(plugin):
+    """Give *plugin* a command, unless one already exists.
+
+    The solvers shipped with FreeCAD keep their hand written commands; this
+    only fills the gap for registered solvers that have none.
+    """
+    if not plugin.factory:
+        return None
+    command = plugin.command_name()
+    if command in FreeCADGui.listCommands():
+        return None
+    FreeCADGui.addCommand(command, _RegisteredSolver(plugin))
+    return command
+
+
+def setup_solver_commands():
+    """Create commands for every registered solver that lacks one.
+
+    Called when the workbench initialises, and again for anything registered
+    afterwards - an add-on loaded late would otherwise be in the registry but
+    absent from every menu.
+    """
+    from femsolver import registry
+
+    for plugin in registry.registered():
+        _add_solver_command(plugin)
+    registry.on_register(_add_solver_command)
 
 
 # the string in add command will be the page name on FreeCAD wiki
@@ -1409,6 +1602,9 @@ FreeCADGui.addCommand("FEM_EquationMagnetodynamic", _EquationMagnetodynamic())
 FreeCADGui.addCommand("FEM_EquationMagnetodynamic2D", _EquationMagnetodynamic2D())
 FreeCADGui.addCommand("FEM_EquationStaticCurrent", _EquationStaticCurrent())
 FreeCADGui.addCommand("FEM_Examples", _Examples())
+FreeCADGui.addCommand("FEM_ExplorationParameters", _ExplorationParameters())
+FreeCADGui.addCommand("FEM_ExplorationPromoteParameter", _ExplorationPromoteParameter())
+FreeCADGui.addCommand("FEM_ExplorationSweep", _ExplorationSweep())
 FreeCADGui.addCommand("FEM_MaterialEditor", _MaterialEditor())
 FreeCADGui.addCommand("FEM_MaterialFluid", _MaterialFluid())
 FreeCADGui.addCommand("FEM_MaterialMechanicalNonlinear", _MaterialMechanicalNonlinear())

@@ -78,11 +78,13 @@ class TestObjectCreate(unittest.TestCase):
         # solver children: equations --> 10
         # gmsh mesh children: group, region, boundary layer etc. --> 10
         # result children: mesh result --> 1
+        # parameter set children: input, output --> 2
+        # sweep children: design points --> 1
         # analysis itself is not in analysis group --> 1
         # vtk post pipeline children: region, scalar, cut, wrap, contour --> 5
         # vtk python post objects: glyph, 6x data extraction --> 7
 
-        subtraction = 22
+        subtraction = 25
         if vtk_objects_used:
             subtraction += 12
             if not ("BUILD_FEM_VTK_PYTHON" in FreeCAD.__cmake__):
@@ -232,6 +234,22 @@ class TestObjectType(unittest.TestCase):
         self.assertEqual("Fem::ConstraintTie", type_of_obj(ObjectsFem.makeConstraintTie(doc)))
         self.assertEqual(
             "Fem::ConstraintTransform", type_of_obj(ObjectsFem.makeConstraintTransform(doc))
+        )
+        self.assertEqual(
+            "Fem::ExplorationInput", type_of_obj(ObjectsFem.makeExplorationInput(doc))
+        )
+        self.assertEqual(
+            "Fem::ExplorationOutput", type_of_obj(ObjectsFem.makeExplorationOutput(doc))
+        )
+        self.assertEqual(
+            "Fem::ExplorationParameters", type_of_obj(ObjectsFem.makeExplorationParameters(doc))
+        )
+        self.assertEqual(
+            "Fem::ExplorationDesignPoints",
+            type_of_obj(ObjectsFem.makeExplorationDesignPoints(doc)),
+        )
+        self.assertEqual(
+            "Fem::ExplorationSweep", type_of_obj(ObjectsFem.makeExplorationSweep(doc))
         )
         self.assertEqual("Fem::ElementFluid1D", type_of_obj(ObjectsFem.makeElementFluid1D(doc)))
         self.assertEqual(
@@ -433,6 +451,23 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_of_type(ObjectsFem.makeConstraintTie(doc), "Fem::ConstraintTie"))
         self.assertTrue(
             is_of_type(ObjectsFem.makeConstraintTransform(doc), "Fem::ConstraintTransform")
+        )
+        self.assertTrue(
+            is_of_type(ObjectsFem.makeExplorationInput(doc), "Fem::ExplorationInput")
+        )
+        self.assertTrue(
+            is_of_type(ObjectsFem.makeExplorationOutput(doc), "Fem::ExplorationOutput")
+        )
+        self.assertTrue(
+            is_of_type(ObjectsFem.makeExplorationParameters(doc), "Fem::ExplorationParameters")
+        )
+        self.assertTrue(
+            is_of_type(
+                ObjectsFem.makeExplorationDesignPoints(doc), "Fem::ExplorationDesignPoints"
+            )
+        )
+        self.assertTrue(
+            is_of_type(ObjectsFem.makeExplorationSweep(doc), "Fem::ExplorationSweep")
         )
         self.assertTrue(is_of_type(ObjectsFem.makeElementFluid1D(doc), "Fem::ElementFluid1D"))
         self.assertTrue(is_of_type(ObjectsFem.makeElementGeometry1D(doc), "Fem::ElementGeometry1D"))
@@ -753,6 +788,36 @@ class TestObjectType(unittest.TestCase):
         constraint_transform = ObjectsFem.makeConstraintTransform(doc)
         self.assertTrue(is_derived_from(constraint_transform, "App::DocumentObject"))
         self.assertTrue(is_derived_from(constraint_transform, "Fem::ConstraintTransform"))
+
+        # ExplorationInput
+        exploration_input = ObjectsFem.makeExplorationInput(doc)
+        self.assertTrue(is_derived_from(exploration_input, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(exploration_input, "Fem::FeaturePython"))
+        self.assertTrue(is_derived_from(exploration_input, "Fem::ExplorationInput"))
+
+        # ExplorationOutput
+        exploration_output = ObjectsFem.makeExplorationOutput(doc)
+        self.assertTrue(is_derived_from(exploration_output, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(exploration_output, "Fem::FeaturePython"))
+        self.assertTrue(is_derived_from(exploration_output, "Fem::ExplorationOutput"))
+
+        # ExplorationParameters
+        exploration_parameters = ObjectsFem.makeExplorationParameters(doc)
+        self.assertTrue(is_derived_from(exploration_parameters, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(exploration_parameters, "Fem::FeaturePython"))
+        self.assertTrue(is_derived_from(exploration_parameters, "Fem::ExplorationParameters"))
+
+        # ExplorationDesignPoints
+        exploration_points = ObjectsFem.makeExplorationDesignPoints(doc)
+        self.assertTrue(is_derived_from(exploration_points, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(exploration_points, "Fem::FeaturePython"))
+        self.assertTrue(is_derived_from(exploration_points, "Fem::ExplorationDesignPoints"))
+
+        # ExplorationSweep
+        exploration_sweep = ObjectsFem.makeExplorationSweep(doc)
+        self.assertTrue(is_derived_from(exploration_sweep, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(exploration_sweep, "Fem::FeaturePython"))
+        self.assertTrue(is_derived_from(exploration_sweep, "Fem::ExplorationSweep"))
 
         # ElementFluid1D
         fluid1d = ObjectsFem.makeElementFluid1D(doc)
@@ -1085,6 +1150,21 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(
             ObjectsFem.makeConstraintTransform(doc).isDerivedFrom("Fem::ConstraintTransform")
         )
+        self.assertTrue(
+            ObjectsFem.makeExplorationInput(doc).isDerivedFrom("Fem::FeaturePython")
+        )
+        self.assertTrue(
+            ObjectsFem.makeExplorationOutput(doc).isDerivedFrom("Fem::FeaturePython")
+        )
+        self.assertTrue(
+            ObjectsFem.makeExplorationParameters(doc).isDerivedFrom("Fem::FeaturePython")
+        )
+        self.assertTrue(
+            ObjectsFem.makeExplorationDesignPoints(doc).isDerivedFrom("Fem::FeaturePython")
+        )
+        self.assertTrue(
+            ObjectsFem.makeExplorationSweep(doc).isDerivedFrom("Fem::FeaturePython")
+        )
         self.assertTrue(ObjectsFem.makeElementFluid1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementGeometry1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementGeometry2D(doc).isDerivedFrom("Fem::FeaturePython"))
@@ -1243,6 +1323,12 @@ def create_all_fem_objects_doc(doc):
     analysis.addObject(ObjectsFem.makeConstraintTemperature(doc, name="ConstraintTemperature"))
     analysis.addObject(ObjectsFem.makeConstraintTie(doc, name="ConstraintTie"))
     analysis.addObject(ObjectsFem.makeConstraintTransform(doc, name="ConstraintTransform"))
+
+    param_set = analysis.addObject(ObjectsFem.makeExplorationParameters(doc))[0]
+    param_set.addObject(ObjectsFem.makeExplorationInput(doc))
+    param_set.addObject(ObjectsFem.makeExplorationOutput(doc))
+    sweep = analysis.addObject(ObjectsFem.makeExplorationSweep(doc))[0]
+    sweep.addObject(ObjectsFem.makeExplorationDesignPoints(doc))
 
     analysis.addObject(ObjectsFem.makeElementFluid1D(doc))
     analysis.addObject(ObjectsFem.makeElementGeometry1D(doc))
