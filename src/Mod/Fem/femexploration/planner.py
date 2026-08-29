@@ -135,11 +135,12 @@ class ExplicitPlanner(StaticPlanner):
         super().__init__(plan, "explicit")
 
 
-def make_planner(spec, points=None):
+def make_planner(spec, points=None, training_rows=None):
     """Build the planner a study specification asks for.
 
     *points*, when given, overrides the study's own plan with an explicit list
     of design vectors - the table asking for particular rows to be evaluated.
+    *training_rows* are the design points a response surface learns from.
     """
     variables = spec.active_variables
     if points is not None:
@@ -163,10 +164,19 @@ def make_planner(spec, points=None):
 
         return make_optimizer(spec)
 
-    raise ValueError(
-        f"no planner for study type {spec.study_type!r}; "
-        "response surface studies arrive in a later release"
-    )
+    if spec.study_type == "ResponseSurface":
+        from .algorithms.responsesurface import ResponseSurfacePlanner
+
+        return ResponseSurfacePlanner(
+            spec,
+            training_rows or [],
+            model=method.get("model", "Kriging"),
+            candidates=int(method.get("candidates", 5) or 5),
+            rounds=int(method.get("rounds", 1) or 1),
+            surrogate_evaluations=int(method.get("surrogate_evaluations", 2000) or 2000),
+        )
+
+    raise ValueError(f"no planner for study type {spec.study_type!r}")
 
 
 ##  @}

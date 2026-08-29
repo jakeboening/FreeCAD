@@ -212,6 +212,13 @@ def _method(study):
         method["point_count"] = int(study.PointCount)
     if hasattr(study, "Alpha"):
         method["alpha"] = str(study.Alpha)
+    if hasattr(study, "Model") and hasattr(study, "Candidates"):
+        method["model"] = str(study.Model)
+        method["candidates"] = int(study.Candidates)
+        method["rounds"] = int(study.Rounds)
+        method["surrogate_evaluations"] = int(study.SurrogateEvaluations)
+        training = getattr(study, "TrainingStudy", None)
+        method["training_study"] = training.Name if training is not None else ""
     if hasattr(study, "Algorithm"):
         method["algorithm"] = str(study.Algorithm)
         method["max_evaluations"] = int(study.MaxEvaluations)

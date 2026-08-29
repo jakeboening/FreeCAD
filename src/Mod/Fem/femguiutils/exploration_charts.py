@@ -313,6 +313,90 @@ def select_design_point(point_id):
     dp.select_point(point_id)
 
 
+def draw_response_surface(figure, data, output=None, model="Kriging", variables=None, resolution=40):
+    """A fitted surface over the two most influential inputs, others at nominal.
+
+    Kriging draws its uncertainty as a second panel: a contour of the
+    predictive standard deviation, so the reader sees where the surface is
+    a fact and where it is a guess.
+    """
+    from femexploration import stats
+    from femexploration.algorithms import sampling
+    from femexploration.algorithms import surrogate as surrogate_module
+
+    if not data.outputs:
+        raise ValueError("a response surface chart needs a response")
+    output = output or data.outputs[0]
+    n = len(data.completed)
+    if n < len(data.inputs) + 2:
+        raise ValueError(f"only {n} completed design points; a surface needs at least {len(data.inputs) + 2}")
+    if variables is None:
+        raise ValueError("the study's variables are needed to place the surface in real units")
+    keys = [v.name for v in variables]
+    models = surrogate_module.fit_table(data.rows, keys, [output], variables, name=model)
+    fitted = models[output]
+
+    # the two inputs that move the output most
+    table = stats.sensitivity_table(data.rows, keys, [output])
+    ranked = sorted(keys, key=lambda k: -abs(table[output]["coefficients"].get(k, 0.0)))
+    ax_keys = ranked[:2] if len(ranked) >= 2 else ranked
+    by_name = {v.name: v for v in variables}
+    nominal_u = [sampling.encode_one(v.nominal, v) for v in variables]
+
+    import numpy as np
+
+    figure.clear()
+    panels = 2 if model == "Kriging" else 1
+    axes = figure.add_subplot(1, panels, 1)
+    if len(ax_keys) == 1:
+        xs = np.linspace(0, 1, resolution)
+        grid = np.tile(nominal_u, (resolution, 1))
+        grid[:, keys.index(ax_keys[0])] = xs
+        real = [sampling.decode_one(x, by_name[ax_keys[0]]) for x in xs]
+        axes.plot(real, fitted.predict(grid), color="#2c5aa0")
+        axes.set_xlabel(data.label(ax_keys[0]))
+        axes.set_ylabel(data.label(output))
+        return [axes]
+
+    i, j = keys.index(ax_keys[0]), keys.index(ax_keys[1])
+    us = np.linspace(0, 1, resolution)
+    uu, vv = np.meshgrid(us, us)
+    grid = np.tile(nominal_u, (resolution * resolution, 1))
+    grid[:, i] = uu.ravel()
+    grid[:, j] = vv.ravel()
+    zz = fitted.predict(grid).reshape(resolution, resolution)
+    xr = [sampling.decode_one(x, by_name[ax_keys[0]]) for x in us]
+    yr = [sampling.decode_one(y, by_name[ax_keys[1]]) for y in us]
+    contour = axes.contourf(xr, yr, zz, levels=20, cmap="viridis")
+    figure.colorbar(contour, ax=axes, label=data.label(output))
+    x, y, _kept = stats.table_arrays(data.rows, ax_keys, [output])
+    axes.scatter(x[:, 0], x[:, 1], c="white", edgecolors="black", s=18)
+    axes.set_xlabel(data.label(ax_keys[0]))
+    axes.set_ylabel(data.label(ax_keys[1]))
+    summary = fitted.summary()
+    axes.set_title(f"{data.label(output)}: {model} on {summary['points']} points, LOO RMSE {summary['loocv_rmse']:.3g}", fontsize=9)
+    result = [axes]
+    if panels == 2:
+        unc = figure.add_subplot(1, 2, 2)
+        ss = fitted.predict_std(grid).reshape(resolution, resolution)
+        c2 = unc.contourf(xr, yr, ss, levels=20, cmap="magma")
+        figure.colorbar(c2, ax=unc, label="predictive std. dev.")
+        unc.scatter(x[:, 0], x[:, 1], c="white", edgecolors="black", s=18)
+        unc.set_xlabel(data.label(ax_keys[0]))
+        unc.set_title("where the surface is a guess", fontsize=9)
+        result.append(unc)
+    figure.suptitle(f"{data.title}: response surface (other inputs at nominal)")
+    figure.tight_layout()
+    return result
+
+
+register_chart(
+    "ResponseSurface",
+    "Response Surface",
+    "A surrogate fitted to the design points over the two most influential inputs, with its uncertainty",
+    "FEM_ExplorationResponseSurfaceChart",
+    draw_response_surface,
+)
 register_chart(
     "History",
     "Optimization History",
@@ -406,6 +490,12 @@ def show_chart(name, study=None):
     window = plot_window(f"{info.title} - {data.title}")
     if name == "Pareto":
         info.draw(window.fig, data, on_pick=select_design_point)
+    elif name == "ResponseSurface":
+        from femexploration import api
+
+        parent = table.getParentGroup()
+        spec = api.study_spec(parent) if parent is not None else None
+        info.draw(window.fig, data, variables=spec.active_variables if spec else None)
     else:
         info.draw(window.fig, data)
     window.canvas.draw()

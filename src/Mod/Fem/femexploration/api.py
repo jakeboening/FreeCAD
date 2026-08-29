@@ -154,11 +154,48 @@ def run_study(
 
     name = backend_name or spec.backend or "Serial"
     backend = _make_backend(name, study.Document, cancel)
-    plan = planner_module.make_planner(spec, points)
+    plan = planner_module.make_planner(spec, points, training_rows=training_rows_for(study, spec))
 
     result = engine.run_study(spec, store, backend, plan, progress=progress, cancel=cancel)
     _store_results(study, result, spec, store)
     return result
+
+
+def training_rows_for(study, spec=None):
+    """Design points a response surface study learns from.
+
+    The linked training study's table, else every table in the analysis.
+    Rows are plain dicts, as the design point object stores them.
+    """
+    if spec is None:
+        spec = study_spec(study)
+    if spec.study_type != "ResponseSurface":
+        return None
+    method = spec.method or {}
+    doc = study.Document
+    sources = []
+    training = method.get("training_study") or ""
+    if training:
+        obj = doc.getObject(training)
+        if obj is not None:
+            sources.append(obj)
+    else:
+        analysis = study.getParentGroup()
+        for other in explorationutils.get_studies(analysis) if analysis else []:
+            if other is not study:
+                sources.append(other)
+    rows = []
+    seen = set()
+    for source in sources:
+        for child in getattr(source, "Group", []):
+            if explorationutils.is_design_points(child):
+                for row in child.Proxy.rows(child):
+                    pid = row.get("point_id")
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
+                    rows.append(row)
+    return rows
 
 
 def run_study_sync(

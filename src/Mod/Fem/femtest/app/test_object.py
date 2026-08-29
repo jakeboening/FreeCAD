@@ -262,6 +262,10 @@ class TestObjectType(unittest.TestCase):
             "Fem::ExplorationOptimization",
             type_of_obj(ObjectsFem.makeExplorationOptimization(doc)),
         )
+        self.assertEqual(
+            "Fem::ExplorationResponseSurface",
+            type_of_obj(ObjectsFem.makeExplorationResponseSurface(doc)),
+        )
         self.assertEqual("Fem::ElementFluid1D", type_of_obj(ObjectsFem.makeElementFluid1D(doc)))
         self.assertEqual(
             "Fem::ElementGeometry1D", type_of_obj(ObjectsFem.makeElementGeometry1D(doc))
@@ -490,6 +494,11 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(
             is_of_type(
                 ObjectsFem.makeExplorationOptimization(doc), "Fem::ExplorationOptimization"
+            )
+        )
+        self.assertTrue(
+            is_of_type(
+                ObjectsFem.makeExplorationResponseSurface(doc), "Fem::ExplorationResponseSurface"
             )
         )
         self.assertTrue(is_of_type(ObjectsFem.makeElementFluid1D(doc), "Fem::ElementFluid1D"))
@@ -852,6 +861,7 @@ class TestObjectType(unittest.TestCase):
             (ObjectsFem.makeExplorationObjective, "Fem::ExplorationObjective"),
             (ObjectsFem.makeExplorationConstraint, "Fem::ExplorationConstraint"),
             (ObjectsFem.makeExplorationOptimization, "Fem::ExplorationOptimization"),
+            (ObjectsFem.makeExplorationResponseSurface, "Fem::ExplorationResponseSurface"),
         ):
             obj = factory(doc)
             self.assertTrue(is_derived_from(obj, "App::DocumentObject"))
@@ -1214,6 +1224,9 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(
             ObjectsFem.makeExplorationOptimization(doc).isDerivedFrom("Fem::FeaturePython")
         )
+        self.assertTrue(
+            ObjectsFem.makeExplorationResponseSurface(doc).isDerivedFrom("Fem::FeaturePython")
+        )
         self.assertTrue(ObjectsFem.makeElementFluid1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementGeometry1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementGeometry2D(doc).isDerivedFrom("Fem::FeaturePython"))
@@ -1382,6 +1395,7 @@ def create_all_fem_objects_doc(doc):
     sweep.addObject(ObjectsFem.makeExplorationDesignPoints(doc))
     analysis.addObject(ObjectsFem.makeExplorationDOE(doc))
     analysis.addObject(ObjectsFem.makeExplorationOptimization(doc))
+    analysis.addObject(ObjectsFem.makeExplorationResponseSurface(doc))
 
     analysis.addObject(ObjectsFem.makeElementFluid1D(doc))
     analysis.addObject(ObjectsFem.makeElementGeometry1D(doc))

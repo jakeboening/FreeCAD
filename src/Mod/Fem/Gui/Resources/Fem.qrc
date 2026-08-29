@@ -59,6 +59,8 @@
         <file>icons/FEM_ExplorationObjective.svg</file>
         <file>icons/FEM_ExplorationConstraint.svg</file>
         <file>icons/FEM_ExplorationFleetCheck.svg</file>
+        <file>icons/FEM_ExplorationResponseSurface.svg</file>
+        <file>icons/FEM_ExplorationResponseSurfaceChart.svg</file>
         <file>icons/FEM_EquationDeformation.svg</file>
         <file>icons/FEM_EquationElasticity.svg</file>
         <file>icons/FEM_EquationElectricforce.svg</file>

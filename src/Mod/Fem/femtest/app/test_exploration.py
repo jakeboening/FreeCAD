@@ -1340,6 +1340,183 @@ class TestNSGA2(unittest.TestCase):
         self.assertEqual(moo.pareto_front(entries), [0, 1])
 
 
+class TestSurrogates(unittest.TestCase):
+    """Response surfaces on smooth functions, no FreeCAD."""
+
+    @staticmethod
+    def _data(n=25, seed=2):
+        import numpy as np
+
+        rng = np.random.default_rng(seed)
+        x = rng.random((n, 2))
+        y = np.sin(3 * x[:, 0]) + 0.5 * x[:, 1] ** 2 + 0.2 * x[:, 0] * x[:, 1]
+        return x, y
+
+    @staticmethod
+    def _rmse(model, x, y):
+        import numpy as np
+
+        return float(np.sqrt(np.mean((model.predict(x) - y) ** 2)))
+
+    def test_polynomial_recovers_a_quadratic_exactly(self):
+        import numpy as np
+
+        from femexploration.algorithms import surrogate
+
+        rng = np.random.default_rng(0)
+        x = rng.random((20, 2))
+        y = 1 + 2 * x[:, 0] - 3 * x[:, 1] + 0.5 * x[:, 0] * x[:, 1]
+        model = surrogate.PolynomialResponseSurface(degree=2).fit(x, y)
+        self.assertLess(self._rmse(model, x, y), 1e-9)
+        self.assertLess(model.loocv(), 1e-6)
+        linear = model.linear_coefficients()
+        self.assertGreater(linear[0], 0)
+        self.assertLess(linear[1], 0)
+
+    def test_polynomial_falls_back_to_linear_with_too_few_points(self):
+        from femexploration.algorithms import surrogate
+
+        x, y = self._data(n=4)
+        model = surrogate.PolynomialResponseSurface(degree=2).fit(x, y)
+        self.assertEqual(model.degree, 1)
+
+    def test_rbf_interpolates(self):
+        from femexploration.algorithms import surrogate
+
+        x, y = self._data()
+        model = surrogate.RBFSurrogate().fit(x, y)
+        self.assertLess(self._rmse(model, x, y), 1e-6)
+        xt, yt = self._data(n=30, seed=9)
+        self.assertLess(self._rmse(model, xt, yt), 0.15)
+
+    def test_kriging_interpolates_and_knows_its_uncertainty(self):
+        import numpy as np
+
+        from femexploration.algorithms import surrogate
+
+        x, y = self._data()
+        model = surrogate.Kriging(seed=1, mle_evaluations=200).fit(x, y)
+        self.assertLess(self._rmse(model, x, y), 1e-3)
+        xt, yt = self._data(n=30, seed=9)
+        self.assertLess(self._rmse(model, xt, yt), 0.1)
+        # the variance is (near) zero at the data and larger away from it
+        std_at_data = model.predict_std(x[:3])
+        far = np.array([[0.5, 0.5]])
+        self.assertTrue(np.all(std_at_data < 1e-3))
+        corner = np.array([[1.0, 1.0]]) if model.predict_std(np.array([[1.0, 1.0]]))[0] > 0 else far
+        self.assertGreater(model.predict_std(corner)[0], std_at_data.max())
+        summary = model.summary()
+        self.assertEqual(summary["model"], "Kriging")
+        self.assertEqual(len(summary["theta"]), 2)
+        self.assertTrue(math.isfinite(summary["loocv_rmse"]))
+
+    def test_kriging_closed_form_loocv_matches_refitting(self):
+        import numpy as np
+
+        from femexploration.algorithms import surrogate
+
+        x, y = self._data(n=15)
+        model = surrogate.Kriging(seed=1, mle_evaluations=150).fit(x, y)
+        fast = model.loocv()
+        errors = []
+        for i in range(len(y)):
+            keep = np.arange(len(y)) != i
+            other = surrogate.Kriging(theta=model.theta, nugget=model.nugget).fit(x[keep], y[keep])
+            errors.append(float(other.predict(x[i : i + 1])[0] - y[i]))
+        slow = float(np.sqrt(np.mean(np.square(errors))))
+        self.assertAlmostEqual(fast, slow, places=4)
+
+    def test_fit_table_encodes_through_the_variables(self):
+        from femexploration.algorithms import surrogate
+
+        spec = _demo_spec()
+        rows = []
+        for w in (500.0, 750.0, 1000.0, 1250.0, 1500.0):
+            for h in (500.0, 1000.0, 1500.0):
+                rows.append({"state": "completed", "inputs": {"Width": [w, "mm"], "Height": [h, "mm"]},
+                             "outputs": {"Mass": w * h * 1e-6, "MaxStress": 1.0 / h}})
+        models = surrogate.fit_table(rows, ["Width", "Height"], ["Mass"], spec.variables, name="Polynomial")
+        self.assertIn("Mass", models)
+        # unit cube (1, 1) is Width 1500, Height 1500
+        self.assertAlmostEqual(float(models["Mass"].predict([[1.0, 1.0]])[0]), 2.25, places=6)
+
+
+class TestResponseSurfacePlanner(unittest.TestCase):
+    """Fit, optimise on the fit, propose candidates - without a solver."""
+
+    @staticmethod
+    def _rows(n=30, seed=4):
+        import numpy as np
+
+        rng = np.random.default_rng(seed)
+        rows = []
+        for _ in range(n):
+            w, h = rng.uniform(500, 1500), rng.uniform(500, 1500)
+            rows.append({
+                "point_id": f"t{len(rows)}", "state": "completed",
+                "inputs": {"Width": [w, "mm"], "Height": [h, "mm"]},
+                # bowl with its minimum at (900, 1100)
+                "outputs": {"MaxStress": ((w - 900) / 100) ** 2 + ((h - 1100) / 100) ** 2, "Mass": w * h * 1e-6},
+            })
+        return rows
+
+    def _spec(self, model="Kriging", candidates=4, rounds=1):
+        spec = _demo_spec()
+        spec.study_type = "ResponseSurface"
+        spec.objectives = [Objective(name="MinStress", response="MaxStress")]
+        spec.constraints = []
+        spec.method = {"model": model, "candidates": candidates, "rounds": rounds, "surrogate_evaluations": 600}
+        return spec
+
+    def test_candidates_land_near_the_surrogate_minimum(self):
+        from femexploration import planner
+
+        spec = self._spec()
+        made = planner.make_planner(spec, training_rows=self._rows())
+        batch = made.initial_batch()
+        # four candidates, plus one exploratory point where Kriging is unsure
+        self.assertIn(len(batch), (4, 5))
+        self.assertIn("Kriging", made.implementation)
+        best = batch[0].values
+        self.assertLess(abs(best["Width"] - 900), 150)
+        self.assertLess(abs(best["Height"] - 1100), 150)
+        self.assertIn("MaxStress", made.summaries)
+        self.assertEqual(made.next_batch(), [])
+
+    def test_a_polynomial_surrogate_needs_no_exploration_point(self):
+        from femexploration import planner
+
+        batch = planner.make_planner(self._spec(model="Polynomial", candidates=3), training_rows=self._rows()).initial_batch()
+        self.assertEqual(len(batch), 3)
+
+    def test_rounds_refit_on_verified_points(self):
+        from femexploration import planner
+
+        spec = self._spec(candidates=2, rounds=2)
+        made = planner.make_planner(spec, training_rows=self._rows(n=12))
+        first = made.initial_batch()
+        results = []
+        for i, vector in enumerate(first):
+            vector.point_id = f"v{i}"
+            w, h = vector.values["Width"], vector.values["Height"]
+            results.append(PointResult(point_id=vector.point_id, state=model.COMPLETED,
+                                       inputs={"Width": [w, "mm"], "Height": [h, "mm"]},
+                                       outputs={"MaxStress": ((w - 900) / 100) ** 2 + ((h - 1100) / 100) ** 2, "Mass": 1.0}))
+        made.observe(results)
+        self.assertEqual(len(made.verified), len(first))
+        second = made.next_batch()
+        self.assertTrue(second)
+        self.assertEqual(len(made.rows), 12 + len(first))
+        self.assertEqual(made.next_batch(), [])
+
+    def test_too_few_training_points_is_refused_with_advice(self):
+        from femexploration import planner
+
+        with self.assertRaises(ValueError) as caught:
+            planner.make_planner(self._spec(), training_rows=self._rows(n=2))
+        self.assertIn("design of experiments", str(caught.exception))
+
+
 class TestStats(unittest.TestCase):
     """Correlation and sensitivity, with no FreeCAD."""
 
@@ -1517,6 +1694,25 @@ class TestCharts(unittest.TestCase):
                    SimpleNamespace(key="MinB", label="MinB", unit="", role="objective"),
                    SimpleNamespace(key="Lim", label="Lim", unit="", role="violation")]
         return charts.chart_data(rows, columns, "Opt")
+
+    def test_response_surface_draws_a_surface_and_its_uncertainty(self):
+        from types import SimpleNamespace
+
+        from matplotlib.figure import Figure
+
+        from femguiutils import exploration_charts as charts
+
+        spec = _demo_spec()
+        rows = TestResponseSurfacePlanner._rows(n=20)
+        columns = [SimpleNamespace(key="Width", label="Width", unit="mm", role="input"),
+                   SimpleNamespace(key="Height", label="Height", unit="mm", role="input"),
+                   SimpleNamespace(key="MaxStress", label="Stress", unit="MPa", role="response")]
+        data = charts.chart_data(rows, columns, "DOE")
+        axes = charts.draw_response_surface(Figure(), data, variables=spec.variables, resolution=12)
+        self.assertEqual(len(axes), 2)
+        self.assertIn("Kriging", axes[0].get_title())
+        polynomial = charts.draw_response_surface(Figure(), data, model="Polynomial", variables=spec.variables, resolution=12)
+        self.assertEqual(len(polynomial), 1)
 
     def test_history_draws_best_so_far_and_infeasible_rate(self):
         from matplotlib.figure import Figure
@@ -2359,6 +2555,105 @@ class TestFleetBackend(unittest.TestCase):
 
 
 @needs_freecad
+class TestExplorationResponseSurface(unittest.TestCase):
+    """DOE, then a response surface study that verifies its candidates."""
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.tmp = tempfile.mkdtemp(prefix="fem_expl_rs_")
+        self.doc = FreeCAD.newDocument("TestExplorationResponseSurface")
+        self.box = self.doc.addObject("Part::Box", "Box")
+        self.box.Length, self.box.Width, self.box.Height = 8000, 1000, 1000
+        self.doc.recompute()
+        self.analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height"):
+            var = explorationpromote.promote(self.box, prop, self.analysis)
+            var.Lower, var.Upper = 500.0, 1500.0
+        pset = explorationutils.get_parameter_set(self.analysis)
+        # a bowl: (Width-900)^2 + (Height-1100)^2, via an expression
+        bowl = ObjectsFem.makeExplorationOutput(self.doc, "Bowl")
+        bowl.Source = model.EXPRESSION
+        bowl.Expression = "(Box.Width - 900 mm)^2 / 1 mm^2 + (Box.Height - 1100 mm)^2 / 1 mm^2"
+        pset.addObject(bowl)
+        objective = ObjectsFem.makeExplorationObjective(self.doc, "MinBowl")
+        objective.Output = bowl
+        pset.addObject(objective)
+
+        self.doe = ObjectsFem.makeExplorationDOE(self.doc, "DOE")
+        self.doe.ParameterSet = pset
+        self.doe.Plan = "LatinHypercube"
+        self.doe.PointCount = 14
+        self.doe.Seed = 3
+        self.analysis.addObject(self.doe)
+
+        self.study = ObjectsFem.makeExplorationResponseSurface(self.doc, "ResponseSurface")
+        self.study.ParameterSet = pset
+        self.study.TrainingStudy = self.doe
+        self.study.Candidates = 3
+        self.study.SurrogateEvaluations = 500
+        self.analysis.addObject(self.study)
+        self.doc.recompute()
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_spec_carries_the_surrogate_settings(self):
+        from femexploration import api
+
+        spec = api.study_spec(self.study)
+        self.assertEqual(spec.study_type, "ResponseSurface")
+        self.assertEqual(spec.method["model"], "Kriging")
+        self.assertEqual(spec.method["candidates"], 3)
+        self.assertEqual(spec.method["training_study"], "DOE")
+
+    def test_without_training_points_the_run_says_what_to_do(self):
+        from femexploration import api
+
+        with self.assertRaises(ValueError) as caught:
+            api.run_study(self.study, run_dir=os.path.join(self.tmp, "rs0"))
+        self.assertIn("design of experiments", str(caught.exception))
+
+    def test_candidates_are_verified_with_real_solves(self):
+        from femexploration import api
+
+        doe = api.run_study(self.doe, run_dir=os.path.join(self.tmp, "doe"))
+        self.assertEqual(len(doe.completed), 14)
+        rows = api.training_rows_for(self.study)
+        self.assertEqual(len(rows), 14)
+
+        result = api.run_study(self.study, run_dir=os.path.join(self.tmp, "rs"))
+        self.assertEqual(len(result.failed), 0, [r.error for r in result.failed])
+        # Kriging: the candidates plus at most one exploratory point
+        self.assertLessEqual(len(result.completed), 4)
+        self.assertGreaterEqual(len(result.completed), 3)
+        best = result.best()
+        self.assertIsNotNone(best)
+        # the verified optimum is near the bowl's floor, and far better than
+        # the best training point of a 14 point design
+        self.assertLess(best.outputs["Bowl"], min(r.outputs["Bowl"] for r in doe.completed) + 1.0)
+        width = best.inputs[_variable_for(api.study_spec(self.study), "Width").name][0]
+        self.assertLess(abs(width - 900.0), 200.0)
+
+    def test_settings_survive_save_and_reopen(self):
+        path = os.path.join(self.tmp, "rs.FCStd")
+        self.study.Model = "Polynomial"
+        self.doc.saveAs(path)
+        self.FreeCAD.closeDocument(self.doc.Name)
+        self.doc = self.FreeCAD.openDocument(path)
+        study = self.doc.getObject("ResponseSurface")
+        self.assertEqual(study.Model, "Polynomial")
+        self.assertEqual(study.TrainingStudy.Name, "DOE")
+        self.assertEqual(study.Proxy.Type, "Fem::ExplorationResponseSurface")
+
+
+@needs_freecad
 class TestLocalParallelBackend(unittest.TestCase):
     """Several FreeCADCmd workers on this machine."""
 
@@ -2604,6 +2899,34 @@ class TestOptimizationPanels(unittest.TestCase):
         self.assertEqual(objective.Output.Label, "Volume")
         self.assertEqual(panel.objective_model.output_labels(), ["Volume"])
         self.doc.abortTransaction()
+
+    def test_the_response_surface_panel_previews_candidates(self):
+        import ObjectsFem
+        from femexploration import api
+
+        objective = ObjectsFem.makeExplorationObjective(self.doc, "MinVolume")
+        objective.Output = self.doc.getObject("Volume")
+        self.pset.addObject(objective)
+        doe = ObjectsFem.makeExplorationDOE(self.doc, "DOE")
+        doe.ParameterSet = self.pset
+        doe.PointCount = 8
+        self.study.getParentGroup().addObject(doe)
+        self.doc.recompute()
+        api.run_study(doe, run_dir=tempfile.mkdtemp(prefix="fem_rs_panel_"))
+        rs = ObjectsFem.makeExplorationResponseSurface(self.doc, "ResponseSurface")
+        rs.ParameterSet = self.pset
+        rs.TrainingStudy = doe
+        rs.Candidates = 2
+        rs.SurrogateEvaluations = 200
+        self.study.getParentGroup().addObject(rs)
+        self.doc.recompute()
+        from femtaskpanels import task_exploration_responsesurface
+
+        panel = task_exploration_responsesurface._TaskPanel(rs)
+        self.assertGreaterEqual(panel.table.rowCount(), 2)
+        self.assertIn("LOO RMSE", panel.fit.text())
+        panel.set_object_params()
+        self.assertEqual(rs.TrainingStudy.Name, "DOE")
 
     def test_the_optimization_panel_previews_the_first_batch(self):
         import ObjectsFem

@@ -461,6 +461,20 @@ def makeExplorationOptimization(doc, name="Optimization"):
     return obj
 
 
+def makeExplorationResponseSurface(doc, name="ResponseSurface"):
+    """makeExplorationResponseSurface(document, [name]):
+    creates a design exploration response surface study"""
+    obj = doc.addObject("Fem::FeaturePython", name)
+    from femobjects import exploration_responsesurface
+
+    exploration_responsesurface.ExplorationResponseSurface(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_exploration_responsesurface
+
+        view_exploration_responsesurface.VPExplorationResponseSurface(obj.ViewObject)
+    return obj
+
+
 def makeExplorationDesignPoints(doc, name="DesignPoints"):
     """makeExplorationDesignPoints(document, [name]):
     creates the design point table of a study"""

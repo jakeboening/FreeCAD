@@ -1509,6 +1509,52 @@ class _ExplorationOptimization(CommandManager):
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
 
 
+class _ExplorationResponseSurface(CommandManager):
+    "The FEM_ExplorationResponseSurface command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationResponseSurface", "Response Surface")
+        self.accel = "D, F"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationResponseSurface",
+            "Creates a response surface study: fit a surrogate to existing design "
+            "points, optimize on it and verify the best candidates with real solves",
+        )
+        self.is_active = "with_analysis"
+
+    def Activated(self):
+        import FemGui
+
+        from femtools import explorationutils
+
+        analysis = FemGui.getActiveAnalysis()
+        param_set = explorationutils.get_parameter_set(analysis)
+        if param_set is None or not explorationutils.get_inputs(param_set):
+            FreeCAD.Console.PrintError(
+                "Add at least one design variable before creating a response surface study.\n"
+            )
+            return
+        if not explorationutils.get_studies(analysis):
+            FreeCAD.Console.PrintWarning(
+                "A response surface learns from an existing study's design points; run a "
+                "design of experiments first.\n"
+            )
+
+        FreeCAD.ActiveDocument.openTransaction("Create Fem ExplorationResponseSurface")
+        FreeCADGui.addModule("ObjectsFem")
+        FreeCADGui.addModule("FemGui")
+        FreeCADGui.doCommand(
+            "obj = ObjectsFem.makeExplorationResponseSurface(FreeCAD.ActiveDocument)"
+        )
+        FreeCADGui.doCommand(
+            f"obj.ParameterSet = FreeCAD.ActiveDocument.getObject('{param_set.Name}')"
+        )
+        FreeCADGui.doCommand("FemGui.getActiveAnalysis().addObject(obj)")
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
+
+
 class _ExplorationFleetCheck(CommandManager):
     "The FEM_ExplorationFleetCheck command definition"
 
@@ -1810,6 +1856,8 @@ FreeCADGui.addCommand("FEM_ExplorationSweep", _ExplorationSweep())
 FreeCADGui.addCommand("FEM_ExplorationDOE", _ExplorationDOE())
 FreeCADGui.addCommand("FEM_ExplorationOptimization", _ExplorationOptimization())
 FreeCADGui.addCommand("FEM_ExplorationFleetCheck", _ExplorationFleetCheck())
+FreeCADGui.addCommand("FEM_ExplorationResponseSurface", _ExplorationResponseSurface())
+FreeCADGui.addCommand("FEM_ExplorationResponseSurfaceChart", _ExplorationChart("ResponseSurface"))
 FreeCADGui.addCommand("FEM_ExplorationHistory", _ExplorationChart("History"))
 FreeCADGui.addCommand("FEM_ExplorationPareto", _ExplorationChart("Pareto"))
 FreeCADGui.addCommand("FEM_ExplorationRun", _ExplorationRun())

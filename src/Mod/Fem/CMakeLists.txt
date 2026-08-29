@@ -226,6 +226,7 @@ SET(FemObjects_SRCS
     femobjects/exploration_optimization.py
     femobjects/exploration_output.py
     femobjects/exploration_parameters.py
+    femobjects/exploration_responsesurface.py
     femobjects/exploration_sweep.py
     femobjects/material_common.py
     femobjects/material_mechanicalnonlinear.py
@@ -631,6 +632,8 @@ SET(FemExplorationAlgorithms_SRCS
     femexploration/algorithms/__init__.py
     femexploration/algorithms/moo.py
     femexploration/algorithms/optimize.py
+    femexploration/algorithms/responsesurface.py
+    femexploration/algorithms/surrogate.py
     femexploration/algorithms/sampling.py
 )
 
@@ -772,6 +775,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_exploration_optimization.py
     femtaskpanels/task_exploration_output.py
     femtaskpanels/task_exploration_parameters.py
+    femtaskpanels/task_exploration_responsesurface.py
     femtaskpanels/task_exploration_doe.py
     femtaskpanels/task_exploration_sweep.py
     femtaskpanels/task_material_common.py
@@ -862,6 +866,7 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_exploration_optimization.py
     femviewprovider/view_exploration_output.py
     femviewprovider/view_exploration_parameters.py
+    femviewprovider/view_exploration_responsesurface.py
     femviewprovider/view_exploration_doe.py
     femviewprovider/view_exploration_sweep.py
     femviewprovider/view_material_common.py
