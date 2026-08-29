@@ -37,6 +37,7 @@ __title__ = "FreeCAD FEM design exploration tests"
 __author__ = "FreeCAD Project Association"
 __url__ = "https://www.freecad.org"
 
+import json
 import os
 import shutil
 import tempfile
@@ -105,6 +106,18 @@ def _demo_spec():
         constraints=[Constraint(name="StressLimit", response="MaxStress", limit=250.0)],
         seed=42,
     )
+
+
+def _variable_for(spec, prop):
+    """The spec variable driving property *prop* of the promoted object.
+
+    Variables are named after their Input object, not the property they
+    drive, so tests look them up by the VarSet property the promotion made.
+    """
+    for var in spec.active_variables:
+        if var.target_property.endswith("_" + prop):
+            return var
+    raise KeyError(prop)
 
 
 class TestExplorationSchema(unittest.TestCase):
@@ -740,6 +753,20 @@ class TestExplorationEngine(unittest.TestCase):
         self.assertEqual(len(result.completed), 9)
         self.assertTrue(all(r.outputs.get("Mass") for r in result.completed))
 
+    def test_explicit_points_run_only_those(self):
+        """The table's Add and Update actions hand the engine a list."""
+        from femexploration import api
+
+        spec = api.study_spec(self.sweep)
+        width = _variable_for(spec, "Width").name
+        height = _variable_for(spec, "Height").name
+        result = self._run(points=[{width: 700.0}])
+        self.assertEqual(len(result.completed), 1)
+        inputs = {k: v[0] for k, v in result.completed[0].inputs.items()}
+        self.assertEqual(inputs[width], 700.0)
+        # the unmentioned variable takes its nominal value
+        self.assertEqual(inputs[height], 1000.0)
+
     def test_a_failing_response_is_recorded_not_raised(self):
         """One broken point must not take the other eight down."""
         from femtools import explorationutils
@@ -830,6 +857,612 @@ class TestExplorationResultCompleteness(unittest.TestCase):
         self.assertEqual(Evaluator._PIPELINE_ARRAYS["Sabs"], ("von Mises Stress", 0))
 
 
+class TestExplorationEvents(unittest.TestCase):
+    """Classifying a run's output, with no Qt and no FreeCAD."""
+
+    def test_a_record_is_an_event(self):
+        from femexploration import events
+
+        kind, payload = events.parse_line('{"event": "finished", "summary": "ok"}')
+        self.assertEqual(kind, events.EVENT)
+        self.assertEqual(payload["summary"], "ok")
+
+    def test_bare_json_scalars_are_not_events(self):
+        from femexploration import events
+
+        self.assertEqual(events.parse_line("0")[0], events.NOISE)
+        self.assertEqual(events.parse_line("true")[0], events.TEXT)
+        self.assertEqual(events.parse_line('"a string"')[0], events.TEXT)
+
+    def test_a_dict_without_an_event_key_is_text(self):
+        from femexploration import events
+
+        self.assertEqual(events.parse_line('{"something": "else"}')[0], events.TEXT)
+
+    def test_freecad_banner_is_noise(self):
+        from femexploration import events
+
+        for line in (
+            "FreeCAD 26.3.0, Libs: 26.3.0devR48263 (Git)",
+            "(C) 2001-2026 FreeCAD contributors",
+            "FreeCAD is free and open-source software licensed under LGPL2+",
+            "",
+            "   ",
+            "-12.5",
+        ):
+            self.assertEqual(events.parse_line(line)[0], events.NOISE, line)
+
+    def test_solver_chatter_is_text(self):
+        from femexploration import events
+
+        line = "[{'ccx_elset': 'Evolumes', 'mat_obj_name': 'Steel'}]"
+        self.assertEqual(events.parse_line(line), (events.TEXT, line))
+
+    def test_line_buffer_reassembles_and_flushes(self):
+        from femexploration import events
+
+        buffer = events.LineBuffer()
+        self.assertEqual(buffer.feed("abc"), [])
+        self.assertEqual(buffer.feed("def\nghi\nj"), ["abcdef", "ghi"])
+        self.assertEqual(buffer.flush(), ["j"])
+        self.assertEqual(buffer.flush(), [])
+
+    def test_describe_point_reads_like_a_sentence(self):
+        from femexploration import events
+
+        text = events.describe_point(
+            {"state": "completed", "inputs": {"Height": 400.0}, "outputs": {"Volume": 2.5, "_mesh_nodes": 9}},
+            2, 5, {"Height": "Beam height"},
+        )
+        self.assertEqual(text, "2 of 5: Beam height 400 -> Volume 2.5")
+        self.assertNotIn("_mesh_nodes", text)
+
+
+class TestExplicitPlanner(unittest.TestCase):
+
+    def test_missing_variables_take_their_nominal(self):
+        from femexploration import planner
+
+        spec = _demo_spec()
+        plan = planner.make_planner(spec, points=[{"Width": 600.0}]).initial_batch()
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(plan[0].values, {"Width": 600.0, "Height": 1000.0})
+
+    def test_unit_carrying_inputs_are_accepted(self):
+        from femexploration import planner
+
+        plan = planner.make_planner(
+            _demo_spec(), points=[{"Width": [600.0, "mm"], "Height": [700.0, "mm"]}]
+        ).initial_batch()
+        self.assertEqual(plan[0].values, {"Width": 600.0, "Height": 700.0})
+
+    def test_an_unknown_variable_is_refused(self):
+        from femexploration import planner
+
+        with self.assertRaises(ValueError):
+            planner.make_planner(_demo_spec(), points=[{"Depth": 1.0}])
+
+    def test_without_points_the_study_plan_is_used(self):
+        from femexploration import planner
+
+        self.assertEqual(len(planner.make_planner(_demo_spec()).initial_batch()), 9)
+
+
+try:
+    from PySide import QtCore as _QtCore
+except ImportError:
+    _QtCore = None
+
+
+@unittest.skipIf(_QtCore is None, "requires PySide")
+class TestDesignPointModel(unittest.TestCase):
+    """The table model, exercised without a window.
+
+    ``QAbstractTableModel`` needs no QApplication, so this runs under
+    FreeCADCmd; only the state icons need a GUI and they are skipped then.
+    """
+
+    def setUp(self):
+        from femguiutils import exploration_designpoints as dp
+
+        self.dp = dp
+        self.model = dp.DesignPointModel()
+        self.model.set_columns(dp.columns_from_spec(_demo_spec()))
+        self.model.set_rows([
+            {"point_id": "a", "state": "completed",
+             "inputs": {"Width": [500.0, "mm"], "Height": [500.0, "mm"]},
+             "outputs": {"MaxStress": 100.0, "Mass": 1.0},
+             "objectives": {"MinMass": 1.0}, "violations": {"StressLimit": 0.0}},
+            {"point_id": "b", "state": "completed",
+             "inputs": {"Width": [1500.0, "mm"], "Height": [500.0, "mm"]},
+             "outputs": {"MaxStress": 300.0, "Mass": 3.0},
+             "objectives": {"MinMass": 3.0}, "violations": {"StressLimit": 50.0}},
+            {"point_id": "c", "state": "solve_failed", "error": "ccx exited 1",
+             "inputs": {"Width": [1000.0, "mm"], "Height": [1000.0, "mm"]},
+             "outputs": {}},
+        ])
+
+    def _cell(self, row, column, role=None):
+        return self.model.data(self.model.index(row, column), role or _QtCore.Qt.DisplayRole)
+
+    def test_columns_follow_the_spec(self):
+        headings = [
+            self.model.headerData(i, _QtCore.Qt.Horizontal) for i in range(self.model.columnCount())
+        ]
+        self.assertEqual(
+            headings,
+            ["State", "Keep", "Point", "Width [mm]", "Height [mm]", "MaxStress [MPa]",
+             "Mass [kg]", "MinMass", "StressLimit"],
+        )
+
+    def test_values_are_read_from_the_right_place(self):
+        self.assertEqual(self._cell(0, 3), "500")
+        self.assertEqual(self._cell(1, 5), "300")
+        self.assertEqual(self._cell(1, 7), "3")
+        self.assertEqual(self._cell(1, 8), "50")
+        self.assertEqual(self._cell(0, 3, self.dp.DesignPointModel.ValueRole), 500.0)
+
+    def test_a_violated_constraint_is_tinted_and_infeasible(self):
+        self.assertIsNotNone(self._cell(1, 8, _QtCore.Qt.BackgroundRole))
+        self.assertIsNone(self._cell(0, 8, _QtCore.Qt.BackgroundRole))
+        self.assertTrue(self.model.is_feasible(0))
+        self.assertFalse(self.model.is_feasible(1))
+        self.assertFalse(self.model.is_feasible(2))
+
+    def test_a_failed_row_carries_its_error(self):
+        self.assertEqual(self._cell(2, 0), "solve_failed")
+        self.assertIn("ccx exited 1", self._cell(2, 0, _QtCore.Qt.ToolTipRole))
+        self.assertTrue(self.model.is_failed(2))
+
+    def test_editing_an_input_marks_the_row_out_of_date(self):
+        """Not re-run: the outputs no longer belong to the inputs, and the
+        row says so instead of quietly lying."""
+        index = self.model.index(0, 3)
+        self.assertTrue(self.model.flags(index) & _QtCore.Qt.ItemIsEditable)
+        self.assertTrue(self.model.setData(index, "750", _QtCore.Qt.EditRole))
+        self.assertEqual(self.model.row(0)["state"], "out_of_date")
+        self.assertEqual(self.model.row(0)["inputs"]["Width"], [750.0, "mm"])
+        self.assertEqual(self.model.stale_points(), [{"Width": 750.0, "Height": 500.0}])
+
+    def test_outputs_are_not_editable(self):
+        self.assertFalse(self.model.flags(self.model.index(0, 5)) & _QtCore.Qt.ItemIsEditable)
+        self.assertFalse(self.model.setData(self.model.index(0, 5), "1", _QtCore.Qt.EditRole))
+
+    def test_a_non_number_is_rejected(self):
+        self.assertFalse(self.model.setData(self.model.index(0, 3), "wide", _QtCore.Qt.EditRole))
+        self.assertEqual(self.model.row(0)["state"], "completed")
+
+    def test_keep_is_a_checkbox(self):
+        index = self.model.index(0, 1)
+        self.assertEqual(self._cell(0, 1, _QtCore.Qt.CheckStateRole), _QtCore.Qt.Unchecked)
+        self.model.setData(index, _QtCore.Qt.Checked, _QtCore.Qt.CheckStateRole)
+        self.assertTrue(self.model.row(0)["retained"])
+
+    def test_upsert_adds_then_updates(self):
+        self.model.upsert({"id": "d", "state": "running", "inputs": {"Width": 800.0, "Height": 800.0}, "outputs": {}})
+        self.assertEqual(self.model.rowCount(), 4)
+        self.model.upsert({"id": "d", "state": "completed", "inputs": {"Width": 800.0, "Height": 800.0},
+                           "outputs": {"Mass": 2.0}})
+        self.assertEqual(self.model.rowCount(), 4)
+        self.assertEqual(self._cell(3, 0), "completed")
+        self.assertEqual(self._cell(3, 6), "2")
+
+    def test_a_typed_row_is_claimed_by_its_result(self):
+        """A row added by hand has no id until the engine names it; the
+        result must land on that row rather than beside it."""
+        r = self.model.add_row({"Width": [900.0, "mm"], "Height": [500.0, "mm"]})
+        self.assertEqual(self.model.rowCount(), 4)
+        self.assertTrue(self.model.is_stale(r))
+        self.model.upsert({"id": "e", "state": "completed",
+                           "inputs": {"Width": 900.0, "Height": 500.0}, "outputs": {"Mass": 9.0}})
+        self.assertEqual(self.model.rowCount(), 4)
+        self.assertEqual(self.model.row(r)["point_id"], "e")
+        self.assertEqual(self.model.row(r)["state"], "completed")
+
+    def test_duplicate_and_remove(self):
+        r = self.model.duplicate_row(1)
+        self.assertEqual(r, 2)
+        self.assertEqual(self.model.rowCount(), 4)
+        self.assertEqual(self.model.inputs_of(2), {"Width": 1500.0, "Height": 500.0})
+        self.assertEqual(self.model.row(2)["state"], "pending")
+        self.model.remove_rows([2, 0])
+        self.assertEqual([row["point_id"] for row in self.model.rows()], ["b", "c"])
+
+    def test_pareto_front_ignores_infeasible_and_failed(self):
+        self.model.upsert({"id": "f", "state": "completed",
+                           "inputs": {"Width": 600.0, "Height": 600.0}, "outputs": {},
+                           "objectives": {"MinMass": 0.5}, "violations": {"StressLimit": 0.0}})
+        self.assertEqual(self.model.pareto_rows(), {3})
+
+    def test_filter_modes(self):
+        proxy = self.dp.DesignPointFilter()
+        proxy.setSourceModel(self.model)
+        counts = {}
+        for mode in self.dp.FILTERS:
+            proxy.set_mode(mode)
+            counts[mode] = proxy.rowCount()
+        self.assertEqual(counts["All"], 3)
+        self.assertEqual(counts["Completed"], 2)
+        self.assertEqual(counts["Failed"], 1)
+        self.assertEqual(counts["Feasible"], 1)
+        self.assertEqual(counts["Pareto"], 1)
+        self.assertEqual(counts["Out of date"], 0)
+
+    def test_csv_round_trip(self):
+        tmp = tempfile.mkdtemp(prefix="fem_dp_")
+        try:
+            path = os.path.join(tmp, "points.csv")
+            self.model.export_csv(path)
+            with open(path) as fh:
+                header = fh.readline().strip()
+            self.assertEqual(
+                header,
+                "point_id,state,Width [mm],Height [mm],MaxStress [MPa],Mass [kg],MinMass,StressLimit",
+            )
+            added = self.model.import_csv(path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(added, 3)
+        self.assertEqual(self.model.rowCount(), 6)
+        self.assertEqual(self.model.inputs_of(3), {"Width": 500.0, "Height": 500.0})
+        self.assertTrue(self.model.is_stale(3))
+
+
+@needs_freecad
+class TestExplorationTools(unittest.TestCase):
+    """The run object behind the panels and the Run Study command."""
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.tmp = tempfile.mkdtemp(prefix="fem_expl_tools_")
+        self.doc = FreeCAD.newDocument("TestExplorationTools")
+        self.box = self.doc.addObject("Part::Box", "Box")
+        self.box.Length, self.box.Width, self.box.Height = 8000, 1000, 1000
+        self.doc.recompute()
+        analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height"):
+            var = explorationpromote.promote(self.box, prop, analysis)
+            var.Lower, var.Upper, var.LevelCount = 500.0, 1500.0, 3
+        pset = explorationutils.get_parameter_set(analysis)
+        out = ObjectsFem.makeExplorationOutput(self.doc, "Volume")
+        out.Source = model.EXPRESSION
+        out.Expression = "Box.Shape.Volume"
+        pset.addObject(out)
+        self.sweep = ObjectsFem.makeExplorationSweep(self.doc, "Sweep")
+        self.sweep.ParameterSet = pset
+        self.sweep.WorkingDirectory = os.path.join(self.tmp, "run")
+        analysis.addObject(self.sweep)
+        self.doc.recompute()
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _tool(self):
+        from femtools import explorationtools
+
+        return explorationtools.ExplorationTools(self.sweep)
+
+    def test_prepare_lays_out_the_run_directory(self):
+        from femtools import objecttools
+
+        tool = self._tool()
+        self.assertIs(objecttools.tool_of(self.sweep), tool)
+        tool.prepare()
+        self.assertEqual(tool.run_dir, self.sweep.WorkingDirectory)
+        self.assertTrue(os.path.exists(os.path.join(tool.run_dir, "model.FCStd")))
+        with open(os.path.join(tool.run_dir, "run_study.py")) as fh:
+            self.assertIn("os.setsid()", fh.read())
+        self.assertEqual(len(tool.plan), 9)
+        self.assertTrue(os.path.exists(tool.binary))
+        args = tool.arguments()
+        self.assertEqual(args[1], "--")
+        self.assertIn("--study", args)
+        self.assertNotIn("--points", args)
+
+    def test_a_stale_cancel_flag_is_removed(self):
+        from femexploration.cancel import CANCEL_FILE
+
+        os.makedirs(self.sweep.WorkingDirectory, exist_ok=True)
+        flag = os.path.join(self.sweep.WorkingDirectory, CANCEL_FILE)
+        with open(flag, "w") as fh:
+            fh.write("old\n")
+        self._tool().prepare()
+        self.assertFalse(os.path.exists(flag))
+
+    def test_explicit_points_are_written_and_passed(self):
+        import json
+
+        from femexploration import api
+
+        spec = api.study_spec(self.sweep)
+        width = _variable_for(spec, "Width").name
+        height = _variable_for(spec, "Height").name
+        tool = self._tool()
+        tool.points = [{width: 700.0}]
+        tool.prepare()
+        args = tool.arguments()
+        self.assertIn("--points", args)
+        with open(args[args.index("--points") + 1]) as fh:
+            self.assertEqual(json.load(fh), [{width: 700.0}])
+        self.assertEqual(tool.plan, [{width: 700.0, height: 1000.0}])
+
+    def test_prepare_refuses_a_study_that_cannot_run(self):
+        for child in list(self.sweep.ParameterSet.Group):
+            if child.Name.startswith("Volume"):
+                self.sweep.ParameterSet.removeObject(child)
+        self.doc.recompute()
+        with self.assertRaises(Exception):
+            self._tool().prepare()
+
+    def test_cancel_writes_the_flag(self):
+        from femexploration.cancel import CANCEL_FILE
+
+        tool = self._tool()
+        tool.prepare()
+        tool.cancel()
+        self.assertTrue(os.path.exists(os.path.join(tool.run_dir, CANCEL_FILE)))
+
+    @unittest.skipUnless(hasattr(os, "killpg") and shutil.which("python3"), "POSIX only")
+    def test_terminate_reaps_the_whole_process_group(self):
+        """The mesher and solver are grandchildren.  Killing the direct child
+        alone leaves them running - the exact leak this exists to stop."""
+        import subprocess
+        import time
+
+        tool = self._tool()
+        tool.prepare()
+        # stand in for FreeCADCmd: become a group leader and spawn a grandchild
+        tool.binary = shutil.which("python3")
+        tool.arguments = lambda: [
+            "-c",
+            "import os, subprocess, time\n"
+            "os.setsid()\n"
+            "subprocess.Popen(['sleep', '60'])\n"
+            "time.sleep(60)\n",
+        ]
+        tool.compute()
+        self.assertTrue(tool.process.waitForStarted(5000))
+        pid = int(tool.process.processId())
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            group = subprocess.run(["pgrep", "-g", str(pid)], capture_output=True, text=True).stdout.split()
+            if len(group) >= 2:
+                break
+            time.sleep(0.05)
+        self.assertGreaterEqual(len(group), 2, "grandchild never appeared")
+
+        tool.terminate()
+        self.assertTrue(tool.process.waitForFinished(5000))
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            left = subprocess.run(["pgrep", "-g", str(pid)], capture_output=True, text=True).stdout.split()
+            if not left:
+                break
+            time.sleep(0.05)
+        self.assertEqual(left, [], "processes survived in the group")
+
+    def test_apply_point_sets_the_model(self):
+        from femexploration import api
+
+        # rows are keyed by the Input object's name, not the property it drives
+        spec = api.study_spec(self.sweep)
+        width = _variable_for(spec, "Width").name
+        height = _variable_for(spec, "Height").name
+        api.apply_point(self.sweep, {width: [750.0, "mm"], height: 650.0})
+        self.assertAlmostEqual(self.box.Width.Value, 750.0)
+        self.assertAlmostEqual(self.box.Height.Value, 650.0)
+
+
+class TestWorker(unittest.TestCase):
+    """The worker's job loop, with the evaluation injected."""
+
+    def _run(self, job, evaluate, cancelled=False):
+        import io
+        from contextlib import redirect_stdout
+
+        from femexploration import worker
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            done = worker.run_job(job, evaluate=evaluate)
+        lines = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+        return done, lines
+
+    def _job(self, tmp):
+        return {
+            "model": "unused.FCStd",
+            "spec": _demo_spec().to_dict(),
+            "run_dir": tmp,
+            "worker": "slot-7",
+            "points": [
+                {"point_id": "p1", "values": {"Width": 500.0, "Height": 500.0}},
+                {"point_id": "p2", "values": {"Width": 700.0, "Height": 500.0}},
+            ],
+        }
+
+    def test_every_point_is_reported_with_the_worker_name(self):
+        tmp = tempfile.mkdtemp(prefix="fem_worker_")
+        try:
+            def evaluate(vector):
+                return PointResult(point_id=vector.point_id, state=model.COMPLETED,
+                                   outputs={"Mass": vector.values["Width"]})
+
+            done, lines = self._run(self._job(tmp), evaluate)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(done, 2)
+        results = [line["point"] for line in lines if line["event"] == "result"]
+        self.assertEqual([r["point_id"] for r in results], ["p1", "p2"])
+        self.assertEqual({r["worker"] for r in results}, {"slot-7"})
+        self.assertEqual(results[1]["outputs"]["Mass"], 700.0)
+
+    def test_a_cancel_flag_stops_the_job_after_the_point_in_flight(self):
+        from femexploration.cancel import CANCEL_FILE
+
+        tmp = tempfile.mkdtemp(prefix="fem_worker_")
+        try:
+            def evaluate(vector):
+                with open(os.path.join(tmp, CANCEL_FILE), "w") as fh:
+                    fh.write("stop\n")
+                return PointResult(point_id=vector.point_id, state=model.COMPLETED)
+
+            done, lines = self._run(self._job(tmp), evaluate)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        results = [line["point"] for line in lines if line["event"] == "result"]
+        self.assertEqual(done, 1)
+        self.assertEqual(results[0]["state"], model.COMPLETED)
+
+
+@needs_freecad
+class TestLocalParallelBackend(unittest.TestCase):
+    """Several FreeCADCmd workers on this machine."""
+
+    def setUp(self):
+        import FreeCAD
+
+        import ObjectsFem
+        from femtools import explorationpromote
+        from femtools import explorationutils
+
+        self.FreeCAD = FreeCAD
+        self.tmp = tempfile.mkdtemp(prefix="fem_expl_par_")
+        self.run_dir = os.path.join(self.tmp, "run")
+        self.doc = FreeCAD.newDocument("TestLocalParallel")
+        self.box = self.doc.addObject("Part::Box", "Box")
+        self.box.Length, self.box.Width, self.box.Height = 8000, 1000, 1000
+        self.doc.recompute()
+        self.analysis = ObjectsFem.makeAnalysis(self.doc, "Analysis")
+        for prop in ("Width", "Height"):
+            var = explorationpromote.promote(self.box, prop, self.analysis)
+            var.Lower, var.Upper, var.LevelCount = 500.0, 1500.0, 3
+        pset = explorationutils.get_parameter_set(self.analysis)
+        out = ObjectsFem.makeExplorationOutput(self.doc, "Volume")
+        out.Source = model.EXPRESSION
+        out.Expression = "Box.Shape.Volume"
+        pset.addObject(out)
+        self.sweep = ObjectsFem.makeExplorationSweep(self.doc, "Sweep")
+        self.sweep.ParameterSet = pset
+        self.sweep.MaxParallel = 2
+        self.analysis.addObject(self.sweep)
+        self.doc.recompute()
+
+    def tearDown(self):
+        self.FreeCAD.closeDocument(self.doc.Name)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _backend(self, **kwargs):
+        from femexploration.backends.localparallel import LocalParallelBackend
+        from femexploration.cancel import CancelToken
+
+        token = CancelToken(self.run_dir)
+        return LocalParallelBackend(self.doc, cancel=token, **kwargs), token
+
+    def _drive(self, backend, token):
+        from femexploration import api
+        from femexploration import engine
+        from femexploration import planner as planner_module
+        from femexploration.store import PointStore
+
+        spec = api.study_spec(self.sweep)
+        store = PointStore(self.run_dir).prepare()
+        token.reset()
+        return engine.run_study(spec, store, backend, planner_module.make_planner(spec), cancel=token)
+
+    def test_the_backend_is_offered(self):
+        from femexploration import backends
+
+        self.assertIn("LocalParallel", backends.available())
+
+    def test_a_sweep_runs_across_workers(self):
+        from femexploration import api
+
+        result = api.run_study(self.sweep, run_dir=self.run_dir, backend_name="LocalParallel")
+        self.assertEqual(len(result.failed), 0, [r.error for r in result.failed])
+        self.assertEqual(len(result.completed), 9)
+        workers = {r.worker for r in result.completed}
+        self.assertEqual(workers, {"slot-0", "slot-1"})
+        volumes = sorted(r.outputs["Volume"] for r in result.completed)
+        self.assertAlmostEqual(volumes[0], 8000 * 500 * 500, delta=1e-3)
+        self.assertAlmostEqual(volumes[-1], 8000 * 1500 * 1500, delta=1e-3)
+        # the workers' journal reached the document
+        table = [c for c in self.sweep.Group if c.Proxy.Type == "Fem::ExplorationDesignPoints"][0]
+        self.assertEqual(table.Count, 9)
+
+    def test_points_of_a_dying_worker_are_retried_once_then_marked_lost(self):
+        launches = []
+
+        backend, token = self._backend()
+        real_command = backend.command
+
+        def command(job_path):
+            launches.append(job_path)
+            return [shutil.which("python3") or "python3", "-c", "import sys; sys.exit(3)"]
+
+        backend.command = command
+        result = self._drive(backend, token)
+        states = {r.state for r in result.results}
+        self.assertEqual(states, {model.WORKER_LOST})
+        self.assertEqual(len(result.results), 9)
+        # 9 points on 2 slots: 2 jobs, each retried once
+        self.assertEqual(len(launches), 4)
+        self.assertIn("exited with code 3", result.results[0].error)
+
+    @unittest.skipUnless(hasattr(os, "killpg"), "POSIX only")
+    def test_cleanup_reaps_every_worker_group(self):
+        import subprocess
+        import time
+
+        from femexploration import api
+        from femexploration.model import DesignVector
+        from femexploration.store import PointStore
+
+        backend, token = self._backend()
+        backend.cancel_grace = 0.2
+        # start_new_session already made the worker a group leader, so a
+        # second setsid() would fail; the real stub guards it the same way
+        backend.command = lambda job_path: [
+            shutil.which("python3") or "python3",
+            "-c",
+            "import os, subprocess, time\n"
+            "try:\n    os.setsid()\nexcept OSError:\n    pass\n"
+            "subprocess.Popen(['sleep', '60'])\ntime.sleep(60)\n",
+        ]
+        spec = api.study_spec(self.sweep)
+        store = PointStore(self.run_dir).prepare()
+        backend.prepare(spec, store)
+        backend.submit([DesignVector(values={"Width": 500.0, "Height": 500.0}, point_id="x"),
+                        DesignVector(values={"Width": 600.0, "Height": 500.0}, point_id="y")])
+        pids = [w.process.pid for w in backend._workers]
+        self.assertEqual(len(pids), 2)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            groups = [subprocess.run(["pgrep", "-g", str(pid)], capture_output=True, text=True).stdout.split()
+                      for pid in pids]
+            if all(len(g) >= 2 for g in groups):
+                break
+            time.sleep(0.05)
+        self.assertTrue(all(len(g) >= 2 for g in groups), "grandchildren never appeared")
+
+        backend.cancel()
+        backend.cleanup()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            left = [subprocess.run(["pgrep", "-g", str(pid)], capture_output=True, text=True).stdout.split()
+                    for pid in pids]
+            if not any(left):
+                break
+            time.sleep(0.05)
+        self.assertFalse(any(left), f"processes survived: {left}")
+
+
 @needs_freecad
 @unittest.skipUnless(_FreeCAD is not None and _FreeCAD.GuiUp, "requires a GUI session")
 class TestSweepPanelOutput(unittest.TestCase):
@@ -878,7 +1511,16 @@ class TestSweepPanelOutput(unittest.TestCase):
         self.FreeCAD.closeDocument(self.doc.Name)
 
     def _log(self):
-        return self.panel.log.toPlainText()
+        return self.panel.text_log.toPlainText()
+
+    def _status(self):
+        return self.panel.run_widget.l_status.text()
+
+    def _cell(self, row, column, role=None):
+        from PySide import QtCore
+
+        model = self.panel.results.model
+        return model.data(model.index(row, column), role or QtCore.Qt.DisplayRole)
 
     def test_a_bare_number_is_not_an_event(self):
         """The exact line that broke it: valid JSON, but an int.
@@ -912,42 +1554,34 @@ class TestSweepPanelOutput(unittest.TestCase):
 
     def test_a_point_event_fills_the_results_table(self):
         """The whole point of the rework: results, not a wall of chatter."""
-        from femexploration import api
-
-        self.panel._prepare_results_table(api.study_spec(self.panel.obj))
         self.panel._handle(
             '{"event": "progress", "total": 3, "completed": 1, "message": "x",'
             ' "point": {"id": "abc123", "state": "completed",'
             ' "inputs": {"Input": 400.0}, "outputs": {"Volume": 1234.5}}}'
         )
-        self.assertEqual(self.panel.results.rowCount(), 1)
-        self.assertEqual(self.panel.results.item(0, 0).text(), "completed")
-        self.assertIn("400", self.panel.status.text())
+        self.assertEqual(self.panel.results.model.rowCount(), 1)
+        self.assertEqual(self._cell(0, 0), "completed")
+        self.assertIn("400", self._status())
 
     def test_a_repeated_point_updates_its_row_rather_than_adding_one(self):
-        from femexploration import api
-
-        self.panel._prepare_results_table(api.study_spec(self.panel.obj))
         event = ('{"event": "progress", "total": 3, "completed": %d, "point":'
                  ' {"id": "abc123", "state": "%s", "inputs": {"Input": 400.0},'
                  ' "outputs": {}}}')
         self.panel._handle(event % (1, "running"))
         self.panel._handle(event % (1, "completed"))
-        self.assertEqual(self.panel.results.rowCount(), 1)
-        self.assertEqual(self.panel.results.item(0, 0).text(), "completed")
+        self.assertEqual(self.panel.results.model.rowCount(), 1)
+        self.assertEqual(self._cell(0, 0), "completed")
 
     def test_a_failed_point_is_marked_and_carries_its_error(self):
-        from femexploration import api
+        from PySide import QtCore
 
-        self.panel._prepare_results_table(api.study_spec(self.panel.obj))
         self.panel._handle(
             '{"event": "progress", "total": 3, "completed": 1, "point":'
             ' {"id": "bad", "state": "solve_failed", "error": "ccx exited 1",'
             ' "inputs": {"Input": 400.0}, "outputs": {}}}'
         )
-        cell = self.panel.results.item(0, 0)
-        self.assertEqual(cell.text(), "solve_failed")
-        self.assertIn("ccx exited 1", cell.toolTip())
+        self.assertEqual(self._cell(0, 0), "solve_failed")
+        self.assertIn("ccx exited 1", self._cell(0, 0, QtCore.Qt.ToolTipRole))
 
     def test_a_dict_without_an_event_key_is_passed_through(self):
         self.panel._handle('{"something": "else"}')
@@ -957,9 +1591,31 @@ class TestSweepPanelOutput(unittest.TestCase):
         self.panel._handle(
             '{"event": "progress", "total": 9, "completed": 4, "message": "dp0004 completed"}'
         )
-        self.assertEqual(self.panel.progress.maximum(), 9)
-        self.assertEqual(self.panel.progress.value(), 4)
+        bar = self.panel.run_widget.pb_progress
+        self.assertEqual(bar.maximum(), 9)
+        self.assertEqual(bar.value(), 4)
         self.assertIn("dp0004 completed", self._log())
+
+    def test_the_dialog_is_three_boxes(self):
+        """Settings, run and results each collapse on their own."""
+        self.assertEqual(len(self.panel.form), 3)
+        self.assertIs(self.panel.form[1], self.panel.run_widget)
+
+    def test_the_run_widget_has_what_the_base_panel_expects(self):
+        self.assertIs(self.panel.text_log, self.panel.run_widget.te_output)
+        self.assertIs(self.panel.text_time, self.panel.run_widget.l_time)
+
+    def test_a_split_event_is_reassembled(self):
+        """A pipe can deliver half a record; the half must not become text."""
+        from femexploration import events
+
+        buffer = events.LineBuffer()
+        first = buffer.feed('{"event": "progress", "total": 9, ')
+        rest = buffer.feed('"completed": 4, "message": "dp0004 completed"}\n')
+        self.assertEqual(first, [])
+        self.assertEqual(len(rest), 1)
+        self.panel._handle(rest[0])
+        self.assertEqual(self.panel.run_widget.pb_progress.value(), 4)
 
     def test_a_malformed_event_cannot_raise(self):
         """This runs in a Qt signal handler, where an exception has nowhere to
@@ -1013,9 +1669,13 @@ class TestSolverRegistry(unittest.TestCase):
 
     def test_the_dropdown_keeps_its_original_contents_and_order(self):
         """The DefaultSolver preference is an index into this list, so its
-        order is part of the interface, not an implementation detail."""
+        order is part of the interface, not an implementation detail.
+
+        Addons register after the built-ins, so anything installed on this
+        machine may follow; the shipped four must come first, in this order.
+        """
         self.assertEqual(
-            self.registry.command_names(),
+            self.registry.command_names()[:4],
             [
                 "FEM_SolverCalculiX",
                 "FEM_SolverElmer",

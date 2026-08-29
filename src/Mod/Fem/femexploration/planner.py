@@ -109,9 +109,38 @@ class SweepPlanner(StaticPlanner):
         super().__init__(sampling.full_factorial(variables))
 
 
-def make_planner(spec):
-    """Build the planner a study specification asks for."""
+class ExplicitPlanner(StaticPlanner):
+    """Design points named outright rather than generated.
+
+    This is what the design point table's Add, Duplicate and Update actions
+    produce: a user typed values into a row and wants exactly that row run.
+    Variables a point does not mention take their nominal value, so a row
+    only has to say what differs.
+    """
+
+    def __init__(self, points, variables):
+        nominal = {var.name: float(var.nominal) for var in variables}
+        plan = []
+        for point in points:
+            values = dict(nominal)
+            for name, value in dict(point).items():
+                if name not in nominal:
+                    raise ValueError(f"{name!r} is not an active design variable")
+                values[name] = float(value[0] if isinstance(value, (list, tuple)) else value)
+            plan.append(values)
+        super().__init__(plan)
+
+
+def make_planner(spec, points=None):
+    """Build the planner a study specification asks for.
+
+    *points*, when given, overrides the study's own plan with an explicit list
+    of design vectors - the table asking for particular rows to be evaluated.
+    """
     variables = spec.active_variables
+    if points is not None:
+        return ExplicitPlanner(points, variables)
+
     method = spec.method or {}
     plan_name = method.get("plan", "FullFactorial")
 

@@ -22,20 +22,18 @@
 
 """Task panel for a parametric sweep.
 
-Two jobs: show what the sweep will do before it does it, and run it without
-freezing FreeCAD.
+Three collapsible boxes: the settings and a preview of the plan, the run
+(log, progress, elapsed time - the same ``ExplorationRun.ui`` every study
+panel uses), and the design point table filling in as results arrive.
 
 The preview matters because a full factorial grows alarmingly - a third
 variable at five levels turns twenty-five points into a hundred and
 twenty-five - and the cheapest place to notice that is before any solving
 starts.
 
-The run happens in a separate FreeCADCmd process rather than on a worker
-thread.  FreeCAD's document API is not thread safe, so the alternative is
-pumping events on the GUI thread, which is exactly the design that makes the
-reference implementation unable to run anything headlessly.  Running the same
-command line front end the CLI and the agent bridge use means all three
-exercise one code path.
+The run itself is :class:`femtools.explorationtools.ExplorationTools`: a
+child ``FreeCADCmd`` process, the same one the command line and the agent
+bridge use, so all three exercise one code path and the GUI never blocks.
 """
 
 __title__ = "FreeCAD FEM exploration sweep task panel"
@@ -45,9 +43,7 @@ __url__ = "https://www.freecad.org"
 ## \addtogroup FEM
 #  @{
 
-import json
 import os
-import re
 import shutil
 
 import FreeCAD
@@ -57,49 +53,54 @@ from PySide import QtCore
 from PySide import QtGui
 
 from femexploration import api
+from femexploration import events
 from femexploration.algorithms import sampling
-from femexploration.cancel import CANCEL_FILE
+from femguiutils import exploration_designpoints as dp
+from femtools import explorationtools
+from femtools.femutils import getOutputWinColor
 
-from . import base_femtaskpanel
-
-def _format(value):
-    """Render a cell: readable numbers, blank for nothing."""
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, (int, float)):
-        return f"{value:g}"
-    return str(value)
+from . import base_femlogtaskpanel
 
 
-_STUB = """import femexploration.cli as cli
-import sys
-
-sys.exit(cli.main())
-"""
-
-
-class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
+class _TaskPanel(base_femlogtaskpanel._BaseLogTaskPanel):
     """Configure, preview and run a sweep."""
 
     def __init__(self, obj):
-        super().__init__(obj)
-        self.process = None
-        self.run_dir = None
-        self._buffer = ""
+        explorationtools.ExplorationTools(obj)
 
-        self.form = QtGui.QWidget()
-        self.form.setWindowTitle("Parametric Sweep")
-        layout = QtGui.QVBoxLayout(self.form)
+        self.settings = self._build_settings(obj)
+        self.run_widget = FreeCADGui.PySideUic.loadUi(
+            FreeCAD.getHomePath() + "Mod/Fem/Resources/ui/ExplorationRun.ui"
+        )
+        self.results = dp.DesignPointView(run_dir=api.last_run_directory(obj))
+
+        # the base class picks its log and timer labels off ``self.form``, and
+        # the dialog wants a list so each widget becomes its own box.  Hand it
+        # the run widget first, then the list.
+        self.form = self.run_widget
+        super().__init__(obj)
+        self.form = [self.settings, self.run_widget, self.results]
+
+        self._labels = {}
+        self._total = 0
+        self.setup_connections()
+        self.get_object_params()
+        self.load_results()
+        self.refresh()
+
+    # ------------------------------------------------------------- widgets
+
+    def _build_settings(self, obj):
+        from femobjects.exploration_sweep import PLANS
+
+        widget = QtGui.QWidget()
+        widget.setWindowTitle("Parametric Sweep")
+        layout = QtGui.QVBoxLayout(widget)
 
         form = QtGui.QFormLayout()
         self.plan = QtGui.QComboBox()
-        from femobjects.exploration_sweep import PLANS
-
         self.plan.addItems(list(PLANS))
         self.plan.setCurrentText(obj.Plan)
-        self.plan.currentTextChanged.connect(self.refresh)
         form.addRow("Plan", self.plan)
 
         self.backend = QtGui.QComboBox()
@@ -122,59 +123,29 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.table.verticalHeader().setVisible(False)
         self.table.setMaximumHeight(160)
         layout.addWidget(self.table)
+        return widget
 
-        row = QtGui.QHBoxLayout()
-        self.run_button = QtGui.QPushButton("Run sweep")
-        self.run_button.clicked.connect(self.run)
-        row.addWidget(self.run_button)
-        self.stop_button = QtGui.QPushButton("Stop")
-        self.stop_button.setEnabled(False)
-        self.stop_button.clicked.connect(self.stop)
-        row.addWidget(self.stop_button)
-        self.clear_button = QtGui.QPushButton("Clear results")
-        self.clear_button.setToolTip(
-            "Delete this study's run directory.\n"
-            "Results accumulate across runs, so old design points from earlier "
-            "bounds stay in the table until they are cleared."
-        )
-        self.clear_button.clicked.connect(self.clear_results)
-        row.addWidget(self.clear_button)
-        row.addStretch(1)
-        layout.addLayout(row)
+    def setup_connections(self):
+        super().setup_connections()
+        self.plan.currentTextChanged.connect(self.refresh)
+        self.run_widget.pb_stop.clicked.connect(self.stop)
+        self.run_widget.pb_clear.clicked.connect(self.clear_results)
+        self.results.runRequested.connect(self.run_points)
+        self.results.currentRequested.connect(self.apply_point)
 
-        self.progress = QtGui.QProgressBar()
-        self.progress.setTextVisible(True)
-        self.progress.setVisible(False)
-        layout.addWidget(self.progress)
+    # ------------------------------------------------------------ settings
 
-        self.status = QtGui.QLabel()
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+    def get_object_params(self):
+        self.plan.setCurrentText(self.obj.Plan)
+        self.backend.setCurrentText(self.obj.Backend)
+        self.resume.setChecked(bool(self.obj.ResumeFromCache))
 
-        # the results as they arrive, rather than a wall of solver chatter
-        layout.addWidget(QtGui.QLabel("<b>Results</b>"))
-        self.results = QtGui.QTableWidget()
-        self.results.setEditTriggers(QtGui.QAbstractItemView.NoEditTriggers)
-        self.results.verticalHeader().setVisible(False)
-        self.results.setMinimumHeight(140)
-        layout.addWidget(self.results)
+    def set_object_params(self):
+        self.obj.Plan = self.plan.currentText()
+        self.obj.Backend = self.backend.currentText()
+        self.obj.ResumeFromCache = self.resume.isChecked()
 
-        # the mesher and solver are talkative and almost none of it is
-        # interesting unless something went wrong, so keep it out of the way
-        self.show_detail = QtGui.QCheckBox("Show solver output")
-        self.show_detail.toggled.connect(self._toggle_detail)
-        layout.addWidget(self.show_detail)
-
-        self.log = QtGui.QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumHeight(160)
-        self.log.setVisible(False)
-        layout.addWidget(self.log)
-
-        self._row_of = {}
-        self.refresh()
-
-    # ----------------------------------------------------------------- preview
+    # ------------------------------------------------------------- preview
 
     def refresh(self, *args):
         """Show the plan without solving anything."""
@@ -184,10 +155,8 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
             self.preview.setText(f"<b>Cannot run:</b> {exc}")
             self.table.clear()
             self.table.setRowCount(0)
-            self.run_button.setEnabled(False)
             return
 
-        self.run_button.setEnabled(True)
         variables = spec.active_variables
         plan = sampling.build_plan(self.plan.currentText(), variables)
 
@@ -206,282 +175,213 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.table.setRowCount(len(shown))
         for r, point in enumerate(shown):
             for c, var in enumerate(variables):
-                item = QtGui.QTableWidgetItem(f"{point[var.name]:g}")
-                self.table.setItem(r, c, item)
+                self.table.setItem(r, c, QtGui.QTableWidgetItem(f"{point[var.name]:g}"))
         self.table.resizeColumnsToContents()
 
-    # --------------------------------------------------------------------- run
+        self._configure_results(spec)
 
-    def run(self):
-        obj = self.obj
-        obj.Plan = self.plan.currentText()
-        obj.Backend = self.backend.currentText()
-        obj.ResumeFromCache = self.resume.isChecked()
+    def _configure_results(self, spec):
+        columns = dp.columns_from_spec(spec)
+        self._labels = {c.key: c.label for c in columns}
+        if [c.key for c in self.results.model.columns()] != [c.key for c in columns]:
+            self.results.set_columns(columns)
+        self.results.set_defaults({v.name: [float(v.nominal), v.unit] for v in spec.active_variables})
 
-        self.run_dir = api.run_directory(obj)
-        os.makedirs(self.run_dir, exist_ok=True)
-        # a stale flag from a previous run would stop this one immediately
+    # --------------------------------------------------------------- results
+
+    def load_results(self):
+        """Fill the table from the document's design point object, if any."""
+        table = None
+        for child in getattr(self.obj, "Group", []):
+            if getattr(getattr(child, "Proxy", None), "Type", "") == "Fem::ExplorationDesignPoints":
+                table = child
+                break
+        if table is None:
+            return
+        columns = dp.columns_from_table(table)
+        if columns:
+            self.results.set_columns(columns)
+            self._labels = {c.key: c.label for c in columns}
+        self.results.set_rows(table.Proxy.rows(table))
+        self.results.run_dir = table.RunDirectory or self.results.run_dir
+
+    # ------------------------------------------------------------------ run
+
+    def run_process(self):
+        """Start a run of the whole plan."""
+        self.tool.points = None
+        self._start()
+
+    def run_points(self, points):
+        """Run just these design vectors: the table's Update action."""
+        self.tool.points = list(points)
+        self._start()
+
+    def _start(self):
+        if self.tool.running():
+            FreeCAD.Console.PrintWarning("A run is already in progress\n")
+            return
+        self.set_object_params()
+        self.text_log.clear()
+
+        # prepare() copies the document, which is a document operation and
+        # therefore stays on the GUI thread; it takes well under a second.
         try:
-            os.remove(os.path.join(self.run_dir, CANCEL_FILE))
-        except OSError:
-            pass
-
-        model = os.path.join(self.run_dir, "model.FCStd")
-        try:
-            obj.Document.saveCopy(model)
+            self.tool.prepare()
         except Exception as exc:
-            self._append(f"Cannot copy the document for the run: {exc}")
+            self.write_log(f"Cannot run: {exc}\n", QtGui.QColor(getOutputWinColor("Error")))
+            self._status(f"Cannot run: {exc}")
             return
 
-        stub = os.path.join(self.run_dir, "run_sweep.py")
-        with open(stub, "w") as fh:
-            fh.write(_STUB)
-
-        binary = _freecadcmd()
-        if binary is None:
-            self._append("Cannot find FreeCADCmd; the sweep cannot be run out of process.")
-            return
-
-        try:
-            spec = api.study_spec(obj)
-        except Exception as exc:
-            self._status_text(f"Cannot run: {exc}")
-            return
-        self._prepare_results_table(spec)
-
-        self.log.clear()
-        self._buffer = ""
-        self.progress.setVisible(True)
-        self.progress.setRange(0, 0)
-        self.progress.setFormat("preparing...")
-        self.run_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.clear_button.setEnabled(False)
-
-        self.process = QtCore.QProcess(self.form)
-        self.process.setProcessChannelMode(QtCore.QProcess.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self._read)
-        self.process.finished.connect(self._finished)
-        args = [
-            stub,
-            "--",
-            model,
-            "--study",
-            obj.Name,
-            "--run-dir",
-            self.run_dir,
-        ]
-        self._status_text(
-            f"Running {self.table.rowCount()} design points... "
-            "this window stays usable while it works."
+        self._configure_results(self.tool.spec)
+        self.results.run_dir = self.tool.run_dir
+        self._total = len(self.tool.plan)
+        bar = self.run_widget.pb_progress
+        bar.setRange(0, 0)
+        bar.setFormat("preparing...")
+        self.run_widget.pb_stop.setEnabled(True)
+        self.run_widget.pb_clear.setEnabled(False)
+        self._status(
+            f"Running {self._total} design points... this window stays usable while it works."
         )
-        self._append(f"run directory: {self.run_dir}")
-        self.process.start(binary, args)
+        self.write_log(
+            f"run directory: {self.tool.run_dir}\n", QtGui.QColor(getOutputWinColor("Text"))
+        )
+
+        self.elapsed.start()
+        self.update_timer_text()
+        self.timer.start(100)
+        self.tool.compute()
 
     def stop(self):
         """Ask the run to stop, and only kill it if it will not."""
-        if self.run_dir:
-            with open(os.path.join(self.run_dir, CANCEL_FILE), "w") as fh:
-                fh.write("cancelled\n")
-            self._append("Cancellation requested; finishing the current design point...")
-        if self.process is not None:
-            QtCore.QTimer.singleShot(5000, self._force_stop)
-
-    def _force_stop(self):
-        if self.process is not None and self.process.state() != QtCore.QProcess.NotRunning:
-            self._append("Still running after the grace period; terminating.")
-            self.process.kill()
-
-    # ------------------------------------------------------------------ output
-
-    def _read(self):
-        # readyRead can arrive after finished() has already cleared the process
-        if self.process is None:
+        if not self.tool.running():
             return
-        data = self.process.readAllStandardOutput().data().decode("utf-8", "replace")
-        self._buffer += data
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            self._handle(line.strip())
+        self.tool.cancel()
+        self._status("Cancellation requested; finishing the current design point...")
+        self.write_log(
+            "Cancellation requested; finishing the current design point...\n",
+            QtGui.QColor(getOutputWinColor("Warning")),
+        )
+
+    # --------------------------------------------------------------- output
+
+    def write_output(self):
+        for kind, payload in self.tool.read_events():
+            self._dispatch(kind, payload)
 
     def _handle(self, line):
-        """Interpret one line of the child's output.
-
-        Anything that is not one of our own progress records is passed through
-        to the log verbatim.  Note that "not ours" is not the same as "not
-        JSON": FreeCAD itself prints bare numbers on stdout, and ``0`` parses
-        perfectly well as JSON - just to an int, not to a record.  Treating any
-        parseable line as an event is what turned a solver's console output
-        into a flood of AttributeErrors.
-
-        This runs from a Qt signal handler, where an exception has nowhere
-        useful to go, so a malformed line must never be able to raise.
-        """
-        line = (line or "").strip()
-        if not line:
+        """Interpret one line of the child's output.  Never raises."""
+        kind, payload = events.parse_line(line)
+        if kind == events.NOISE:
             return
         try:
-            event = json.loads(line)
-        except ValueError:
-            self._append(line)
-            return
-
-        if not isinstance(event, dict) or "event" not in event:
-            self._append(line)
-            return
-
-        try:
-            self._handle_event(event, line)
+            self._dispatch(kind, payload)
         except Exception as exc:
-            self._append(f"{line}   [could not be read: {exc}]")
+            self.write_log(f"{line}   [could not be read: {exc}]\n", QtGui.QColor(getOutputWinColor("Error")))
 
-    def _handle_event(self, event, line):
+    def _dispatch(self, kind, payload):
+        if kind == events.TEXT:
+            self.write_log(payload + "\n", QtGui.QColor(getOutputWinColor("Logging")))
+            return
+        try:
+            self._handle_event(payload)
+        except Exception as exc:
+            self.write_log(
+                f"{payload}   [could not be read: {exc}]\n", QtGui.QColor(getOutputWinColor("Error"))
+            )
+
+    def _handle_event(self, event):
         kind = event.get("event")
         if kind == "progress":
             self._on_progress(event)
         elif kind == "finished":
-            self._status_text(event.get("summary", "finished"))
-            self._append(event.get("summary", "finished"))
+            summary = event.get("summary", "finished")
+            self._status(summary)
+            self.write_log(summary + "\n", QtGui.QColor(getOutputWinColor("Text")))
         elif kind == "error":
-            self._status_text(f"Error: {event.get('message')}")
-            self._append(f"ERROR: {event.get('message')}")
+            self._status(f"Error: {event.get('message')}")
+            self.write_log(f"ERROR: {event.get('message')}\n", QtGui.QColor(getOutputWinColor("Error")))
         elif kind == "started":
-            self._append(f"Started {event.get('study')}")
+            self.write_log(f"Started {event.get('study')}\n", QtGui.QColor(getOutputWinColor("Text")))
         else:
-            self._append(line)
+            self.write_log(f"{event}\n", QtGui.QColor(getOutputWinColor("Logging")))
 
     def _on_progress(self, event):
-        total = event.get("total") or 0
+        total = event.get("total") or self._total
         completed = event.get("completed", 0)
+        bar = self.run_widget.pb_progress
         if total:
-            self.progress.setRange(0, total)
-            self.progress.setValue(completed)
-            self.progress.setFormat(f"%v of %p%% - {completed} of {total} design points")
+            bar.setRange(0, total)
+            bar.setValue(completed)
+            bar.setFormat(f"%p% - {completed} of {total} design points")
 
         point = event.get("point")
         if isinstance(point, dict):
-            self._add_result_row(point)
-            self._status_text(self._describe_point(point, completed, total))
-            # the row and the status line already say this; repeating it in the
-            # detail log just pushes the solver output the user came for
-            # further out of view
+            self.results.upsert(point)
+            self._status(events.describe_point(point, completed, total, self._labels))
             if point.get("state") != "completed":
-                self._append(f"{point.get('id', '')}: {point.get('error', '')}")
+                self.write_log(
+                    f"{point.get('id', '')}: {point.get('state')} {point.get('error', '')}\n",
+                    QtGui.QColor(getOutputWinColor("Error")),
+                )
         elif event.get("message"):
-            self._append(event["message"])
+            self.write_log(f"{event['message']}\n", QtGui.QColor(getOutputWinColor("Logging")))
 
-    def _describe_point(self, point, completed, total):
-        """One readable line about the point that just finished."""
-        inputs = ", ".join(
-            f"{self._column_label(name)} {_format(value)}"
-            for name, value in point.get("inputs", {}).items()
-        )
-        state = point.get("state", "")
-        if state != "completed":
-            return f"{completed} of {total}: {inputs} - {state} ({point.get('error', '')})"
+    def _status(self, text):
+        self.run_widget.l_status.setText(text)
 
-        outputs = ", ".join(
-            f"{self._column_label(name)} {_format(value)}"
-            for name, value in point.get("outputs", {}).items()
-            if not name.startswith("_")
-        )
-        suffix = "  (reused)" if point.get("reused") else ""
-        return f"{completed} of {total}: {inputs} -> {outputs}{suffix}"
+    def process_finished(self, code, status):
+        for kind, payload in self.tool.drain():
+            self._dispatch(kind, payload)
+        super().process_finished(code, status)
 
-    # ------------------------------------------------------------ result table
+        self.run_widget.pb_stop.setEnabled(False)
+        self.run_widget.pb_clear.setEnabled(True)
+        bar = self.run_widget.pb_progress
+        if bar.maximum() == 0:
+            bar.setRange(0, 1)
+            bar.setValue(0)
 
-    def _prepare_results_table(self, spec):
-        """Columns follow the study, so the table reads like the CSV will."""
-        self._columns = [(v.name, v.label or v.name, v.unit) for v in spec.active_variables]
-        self._columns += [(r.name, r.label or r.name, r.unit) for r in spec.responses]
-        self._labels = {name: label for name, label, _unit in self._columns}
-        self._row_of = {}
-
-        headings = ["State"] + [
-            f"{label} [{unit}]" if unit else label for _name, label, unit in self._columns
-        ]
-        self.results.clear()
-        self.results.setColumnCount(len(headings))
-        self.results.setHorizontalHeaderLabels(headings)
-        self.results.setRowCount(0)
-
-    def _column_label(self, name):
-        return getattr(self, "_labels", {}).get(name, name)
-
-    def _add_result_row(self, point):
-        point_id = point.get("id", "")
-        row = self._row_of.get(point_id)
-        if row is None:
-            row = self.results.rowCount()
-            self.results.insertRow(row)
-            self._row_of[point_id] = row
-
-        state = point.get("state", "")
-        cell = QtGui.QTableWidgetItem(
-            state + (" (reused)" if point.get("reused") else "")
-        )
-        if state != "completed":
-            cell.setForeground(QtGui.QColor(200, 60, 60))
-            cell.setToolTip(point.get("error", ""))
-        self.results.setItem(row, 0, cell)
-
-        values = dict(point.get("inputs", {}))
-        values.update(point.get("outputs", {}))
-        for column, (name, _label, _unit) in enumerate(getattr(self, "_columns", []), start=1):
-            item = QtGui.QTableWidgetItem(_format(values.get(name)))
-            item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-            self.results.setItem(row, column, item)
-
-        self.results.resizeColumnsToContents()
-        self.results.scrollToBottom()
-
-    def _status_text(self, text):
-        self.status.setText(text)
-
-    def _toggle_detail(self, shown):
-        self.log.setVisible(shown)
-
-    def _finished(self, code, status):
-        # drain anything still buffered before letting go of the process
-        self._read()
-        if self._buffer.strip():
-            self._handle(self._buffer.strip())
-            self._buffer = ""
-
-        self.progress.setVisible(False)
-        self.run_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.clear_button.setEnabled(True)
-
-        planned = self.results.rowCount()
-        if self.run_dir and os.path.isdir(self.run_dir):
-            try:
-                table, results = api.import_run(self.obj, self.run_dir)
-                extra = len(results) - planned
-                note = ""
-                if extra > 0:
-                    # the journal spans runs, so points from earlier bounds are
-                    # still there; say so rather than let the count look wrong
-                    note = (
-                        f"  ({extra} from earlier runs are also in the table; "
-                        "use Clear results to start fresh)"
-                    )
-                self._status_text(f"Loaded {len(results)} design points into {table.Label}.{note}")
-            except Exception as exc:
-                self._status_text(f"Could not load the results: {exc}")
+        # the tool has already loaded the journal into the document; show it
+        planned = self._total
+        self.load_results()
+        count = self.results.model.rowCount()
+        note = ""
+        if count > planned > 0:
+            note = (
+                f"  ({count - planned} from earlier runs are also in the table; "
+                "use Clear results to start fresh)"
+            )
+        text = f"Loaded {count} design points.{note}"
         if code != 0:
-            self._status_text(self.status.text() + f"  The run exited with code {code}.")
-        self.process = None
+            text += f"  The run exited with code {code}."
+        self._status(text)
+
+    def process_failed(self, error):
+        super().process_failed(error)
+        self.run_widget.pb_stop.setEnabled(False)
+        self.run_widget.pb_clear.setEnabled(True)
+
+    # -------------------------------------------------------------- actions
+
+    def apply_point(self, row):
+        try:
+            api.apply_point(self.obj, row.get("inputs", {}))
+        except Exception as exc:
+            QtGui.QMessageBox.warning(self.run_widget, "Could not apply the design point", str(exc))
+            return
+        self._status(f"Model set to design point {row.get('point_id', '')}")
 
     def clear_results(self):
         """Delete the run directory, so the next run starts from nothing."""
-        run_dir = api.run_directory(self.obj)
+        run_dir = api.last_run_directory(self.obj)
         if not os.path.isdir(run_dir):
-            self._status_text("There are no stored results to clear.")
+            self._status("There are no stored results to clear.")
             return
 
         reply = QtGui.QMessageBox.question(
-            self.form,
+            self.run_widget,
             "Clear results",
             f"Delete every stored design point in\n{run_dir}?\n\n"
             "The next run will re-evaluate everything from scratch.",
@@ -490,71 +390,25 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         )
         if reply != QtGui.QMessageBox.Yes:
             return
-
         try:
             shutil.rmtree(run_dir)
         except OSError as exc:
-            self._status_text(f"Could not clear the results: {exc}")
+            self._status(f"Could not clear the results: {exc}")
             return
+        self.results.model.clear()
+        self._status("Stored results cleared.")
 
-        self.results.setRowCount(0)
-        self._row_of = {}
-        self._status_text("Stored results cleared.")
-
-    #: Lines the child emits that carry no information at all.  FreeCAD prints
-    #: bare numbers and its own banner on stdout; repeating them in a log the
-    #: user is reading to find a solver error is pure obstruction.
-    _NOISE = re.compile(
-        r"^\s*$"
-        r"|^-?\d+(\.\d+)?$"
-        r"|^FreeCAD \d"
-        r"|^\(C\) \d{4}"
-        r"|^FreeCAD is free and open-source"
-    )
-
-    def _append(self, text):
-        """Add a line to the detail log, unless it is known noise."""
-        text = (text or "").rstrip()
-        if not text or self._NOISE.match(text):
-            return
-        self.log.appendPlainText(text)
-
-    # ------------------------------------------------------------- task dialog
-
-    def getStandardButtons(self):
-        return int(QtGui.QDialogButtonBox.Close)
-
-    def accept(self):
-        if self.process is not None:
-            FreeCAD.Console.PrintWarning("The sweep is still running.\n")
-            return False
-        self.obj.Plan = self.plan.currentText()
-        self.obj.Backend = self.backend.currentText()
-        self.obj.ResumeFromCache = self.resume.isChecked()
-        return super().accept()
+    # ---------------------------------------------------------- task dialog
 
     def reject(self):
-        if self.process is not None:
+        if self.tool.running():
+            # the base class would kill the process outright, orphaning the
+            # mesher and solver underneath it; ask nicely first
             self.stop()
-            return False
-        gui_doc = self.obj.ViewObject.Document
-        gui_doc.resetEdit()
-        return True
-
-
-def _freecadcmd():
-    """Locate the console binary belonging to this installation."""
-    candidate = os.path.join(FreeCAD.getHomePath(), "bin", "FreeCADCmd")
-    if os.path.exists(candidate):
-        return candidate
-    found = shutil.which("FreeCADCmd")
-    if found:
-        return found
-    if "FreeCADCmd" in os.path.basename(FreeCAD.ConfigGet("ExeName") or ""):
-        import sys
-
-        return sys.executable
-    return None
+            return None
+        self.timer.stop()
+        QtGui.QApplication.restoreOverrideCursor()
+        return base_femlogtaskpanel.base_femtaskpanel._BaseTaskPanel.reject(self)
 
 
 ##  @}

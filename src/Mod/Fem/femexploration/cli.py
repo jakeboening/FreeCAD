@@ -77,6 +77,13 @@ def build_parser():
     parser.add_argument("--backend", help="override the study's execution backend")
     parser.add_argument("--run-dir", help="override the run directory")
     parser.add_argument(
+        "--points",
+        help=(
+            "JSON file holding a list of {variable: value} design points to run "
+            "instead of the study's own plan"
+        ),
+    )
+    parser.add_argument(
         "--csv", help="also write the results table to this CSV file when finished"
     )
     parser.add_argument(
@@ -138,6 +145,14 @@ def main(argv=None):
         return 2
     study = studies[0]
 
+    points = None
+    if args.points:
+        with open(args.points) as fh:
+            points = json.load(fh)
+        if not isinstance(points, list):
+            emit("error", message=f"{args.points} must hold a JSON list of design points")
+            return 2
+
     emit("started", study=study.Label, document=doc.Name)
     try:
         result = api.run_study(
@@ -145,6 +160,7 @@ def main(argv=None):
             progress=_progress_printer,
             backend_name=args.backend,
             run_dir=args.run_dir,
+            points=points,
         )
     except Exception as exc:
         import traceback

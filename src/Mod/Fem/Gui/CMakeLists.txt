@@ -439,6 +439,7 @@ SET(FemGuiPythonUI_SRCS
     Resources/ui/ElectricChargeDensity.ui
     Resources/ui/Electromagnetic.ui
     Resources/ui/ElementFluid1D.ui
+    Resources/ui/ExplorationRun.ui
     Resources/ui/ElementGeometry1D.ui
     Resources/ui/ElementGeometry2D.ui
     Resources/ui/ElementRotation1D.ui

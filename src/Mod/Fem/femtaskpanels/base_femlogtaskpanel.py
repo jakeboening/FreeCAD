@@ -37,6 +37,7 @@ from PySide import QtGui
 import FreeCAD
 import FemGui
 
+from femtools import objecttools
 from femtools.femutils import getOutputWinColor
 
 from . import base_femtaskpanel
@@ -70,7 +71,7 @@ class _BaseLogTaskPanel(base_femtaskpanel._BaseTaskPanel, ABC):
 
     def __init__(self, obj):
         super().__init__(obj)
-        self.tool = obj.Tool
+        self.tool = objecttools.tool_of(obj)
         self.timer = QtCore.QTimer()
         self.elapsed = QtCore.QElapsedTimer()
         self._thread = _Thread(self.tool)

@@ -130,12 +130,17 @@ def run_directory(study, spec=None):
     return os.path.join(tempfile.gettempdir(), "fem_exploration", name)
 
 
-def run_study(study, progress=None, cancel=None, backend_name=None, run_dir=None):
+def run_study(
+    study, progress=None, cancel=None, backend_name=None, run_dir=None, points=None
+):
     """Run a study document object to completion and return its result.
 
     Blocking.  The GUI and the MCP bridge do not call this directly; they run
     the command line front end in a separate process so that a study taking
     minutes cannot freeze either of them.
+
+    *points* replaces the study's plan with an explicit list of design
+    vectors, which is how individual rows of the table get (re)evaluated.
     """
     spec = study_spec(study)
     store = PointStore(run_dir or run_directory(study, spec)).prepare()
@@ -149,14 +154,16 @@ def run_study(study, progress=None, cancel=None, backend_name=None, run_dir=None
 
     name = backend_name or spec.backend or "Serial"
     backend = _make_backend(name, study.Document, cancel)
-    plan = planner_module.make_planner(spec)
+    plan = planner_module.make_planner(spec, points)
 
     result = engine.run_study(spec, store, backend, plan, progress=progress, cancel=cancel)
     _store_results(study, result, spec, store)
     return result
 
 
-def run_study_sync(spec, doc, run_dir, progress=None, cancel=None, backend_name=None):
+def run_study_sync(
+    spec, doc, run_dir, progress=None, cancel=None, backend_name=None, points=None
+):
     """Run from a specification rather than a document object.
 
     This is what a worker process uses: it has a spec and an open document, but
@@ -166,7 +173,7 @@ def run_study_sync(spec, doc, run_dir, progress=None, cancel=None, backend_name=
     store = PointStore(run_dir).prepare()
     cancel = cancel or CancelToken(store.run_dir)
     backend = _make_backend(backend_name or spec.backend or "Serial", doc, cancel)
-    plan = planner_module.make_planner(spec)
+    plan = planner_module.make_planner(spec, points)
     return engine.run_study(spec, store, backend, plan, progress=progress, cancel=cancel)
 
 
@@ -240,6 +247,41 @@ def import_run(study, run_dir):
 
     table = _store_results(study, carrier, spec, store)
     return table, results
+
+
+def apply_point(study, inputs):
+    """Make the document become the design point *inputs* describes.
+
+    Writes each value into its variable's target through the same writer the
+    engine uses, inside one transaction, so the change is a single undo step
+    and a failure part way through leaves the model as it was.
+    """
+    from .evaluate import writer_for
+
+    analysis = study.getParentGroup()
+    if analysis is None:
+        raise ValueError("the study is not inside an analysis")
+    param_set = explorationutils.get_parameter_set(analysis)
+    if param_set is None:
+        raise ValueError("the analysis has no parameter set")
+
+    doc = study.Document
+    doc.openTransaction("Apply design point")
+    try:
+        for var_obj in explorationutils.get_inputs(param_set):
+            entry = inputs.get(var_obj.Name)
+            if entry is None:
+                continue
+            value = entry[0] if isinstance(entry, (list, tuple)) else entry
+            target = var_obj.Target
+            if target is None:
+                continue
+            writer_for(var_obj.TargetTypeId)(target, var_obj.TargetProperty, value, var_obj.Unit)
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    doc.recompute()
 
 
 def _best_of(results):

@@ -1424,6 +1424,66 @@ class _ExplorationSweep(CommandManager):
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(obj.Name)")
 
 
+class _ExplorationRun(CommandManager):
+    "The FEM_ExplorationRun command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ExplorationRun", "Run Study")
+        self.accel = "D, R"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_ExplorationRun",
+            "Runs the selected design exploration study, or the analysis' only "
+            "study, in a separate process; progress goes to the report view",
+        )
+        self.is_active = "with_analysis"
+
+    def Activated(self):
+        import FemGui
+
+        from femtools import explorationtools
+        from femtools import explorationutils
+
+        study = None
+        for obj in FreeCADGui.Selection.getSelection():
+            if explorationutils.is_exploration_study(obj):
+                study = obj
+                break
+        if study is None:
+            analysis = FemGui.getActiveAnalysis()
+            studies = explorationutils.get_studies(analysis) if analysis else []
+            if len(studies) == 1:
+                study = studies[0]
+            elif not studies:
+                FreeCAD.Console.PrintError(
+                    "The analysis has no study to run. Create a Parametric Sweep first.\n"
+                )
+                return
+            else:
+                FreeCAD.Console.PrintError(
+                    "The analysis has several studies; select the one to run.\n"
+                )
+                return
+
+        from femtools import objecttools
+
+        tool = objecttools.tool_of(study)
+        if tool is not None and tool.running():
+            FreeCAD.Console.PrintWarning(f"{study.Label} is already running\n")
+            return
+        tool = explorationtools.ExplorationTools(study)
+        try:
+            tool.prepare()
+        except Exception as exc:
+            FreeCAD.Console.PrintError(f"Cannot run {study.Label}: {exc}\n")
+            return
+        tool.attach_console()
+        FreeCAD.Console.PrintMessage(
+            f"Running {study.Label}: {len(tool.plan)} design points in {tool.run_dir}\n"
+        )
+        tool.compute()
+
+
 class _ExplorationPromoteParameter(CommandManager):
     "The FEM_ExplorationPromoteParameter command definition"
 
@@ -1605,6 +1665,7 @@ FreeCADGui.addCommand("FEM_Examples", _Examples())
 FreeCADGui.addCommand("FEM_ExplorationParameters", _ExplorationParameters())
 FreeCADGui.addCommand("FEM_ExplorationPromoteParameter", _ExplorationPromoteParameter())
 FreeCADGui.addCommand("FEM_ExplorationSweep", _ExplorationSweep())
+FreeCADGui.addCommand("FEM_ExplorationRun", _ExplorationRun())
 FreeCADGui.addCommand("FEM_MaterialEditor", _MaterialEditor())
 FreeCADGui.addCommand("FEM_MaterialFluid", _MaterialFluid())
 FreeCADGui.addCommand("FEM_MaterialMechanicalNonlinear", _MaterialMechanicalNonlinear())

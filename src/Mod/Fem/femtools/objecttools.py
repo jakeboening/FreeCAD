@@ -34,11 +34,33 @@ import tempfile
 import FreeCAD
 
 
+def attach_tool(obj, tool):
+    """Remember *tool* on *obj* so a task panel can find it later.
+
+    Solver and mesh objects accept arbitrary Python attributes, so the tool
+    simply becomes ``obj.Tool``.  A plain ``FeaturePython`` object does not,
+    and its proxy is the only Python-side place that survives the call, so
+    the tool lives there instead; ``tool_of`` reads either.
+    """
+    try:
+        obj.Tool = tool
+    except AttributeError:
+        obj.Proxy.tool = tool
+
+
+def tool_of(obj):
+    """The tool attached to *obj* by :func:`attach_tool`, or None."""
+    tool = getattr(obj, "Tool", None)
+    if tool is None:
+        tool = getattr(getattr(obj, "Proxy", None), "tool", None)
+    return tool
+
+
 class ObjectTools(ABC):
     """Abstract base class for the work with solvers and meshers"""
 
     def __init__(self, obj):
-        obj.Tool = self
+        attach_tool(obj, self)
         self.obj = obj
         self.model_file = ""
         self.process = QProcess()

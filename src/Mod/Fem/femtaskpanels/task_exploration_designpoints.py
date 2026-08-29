@@ -22,9 +22,10 @@
 
 """Task panel for the design point table.
 
-Read only: these are results.  Editing an input here would suggest the row
-could be recomputed in place, which it cannot - changing a design point means
-running it, which is the sweep's job.
+The table is the study's results, with the actions a table of designs wants:
+filter, sort, export, set the model to a row, open a retained point, and add
+or edit rows and have the study run them.  Running goes through the parent
+study's tools in a child process; this panel only watches.
 """
 
 __title__ = "FreeCAD FEM exploration design points task panel"
@@ -34,179 +35,108 @@ __url__ = "https://www.freecad.org"
 ## \addtogroup FEM
 #  @{
 
-import os
-
 import FreeCAD
-import FreeCADGui
 
-from PySide import QtCore
 from PySide import QtGui
 
-from femexploration import model as expl_model
+from femexploration import api
+from femexploration import events
+from femguiutils import exploration_designpoints as dp
+from femtools import explorationtools
 
 from . import base_femtaskpanel
 
-#: colour cues for the per-row state, so a failed run reads at a glance
-_STATE_COLOUR = {
-    expl_model.COMPLETED: None,
-    expl_model.CANCELLED: QtGui.QColor(200, 200, 200),
-}
-
 
 class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
-    """Show the results of a study run."""
+    """Show, and act on, the results of a study run."""
 
     def __init__(self, obj):
         super().__init__(obj)
+        self.study = obj.getParentGroup()
 
         self.form = QtGui.QWidget()
         self.form.setWindowTitle("Design Points")
         layout = QtGui.QVBoxLayout(self.form)
 
-        self.summary = QtGui.QLabel()
-        self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
-
-        self.table = QtGui.QTableWidget()
-        self.table.setEditTriggers(QtGui.QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QtGui.QAbstractItemView.SelectRows)
-        self.table.verticalHeader().setVisible(False)
-        layout.addWidget(self.table)
-
-        row = QtGui.QHBoxLayout()
-        export = QtGui.QPushButton("Export CSV...")
-        export.clicked.connect(self.export)
-        row.addWidget(export)
-        apply_point = QtGui.QPushButton("Apply selected design")
-        apply_point.setToolTip(
-            "Write the selected point's inputs back into the model, so the "
-            "document becomes that design"
+        self.view = dp.DesignPointView(
+            run_dir=obj.RunDirectory or None, show_run_actions=self.study is not None
         )
-        apply_point.clicked.connect(self.apply_point)
-        row.addWidget(apply_point)
-        row.addStretch(1)
-        layout.addLayout(row)
+        layout.addWidget(self.view)
 
+        self.status = QtGui.QLabel()
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+        self.view.runRequested.connect(self.run_points)
+        self.view.currentRequested.connect(self.apply_point)
+        self.tool = None
         self.refresh()
 
     # ------------------------------------------------------------------- view
 
     def refresh(self):
         obj = self.obj
-        rows = obj.Proxy.rows(obj)
-
-        keys = list(getattr(obj, "ColumnKeys", []) or [])
-        headings = list(obj.ColumnNames) or keys
-        units = list(obj.ColumnUnits)
-        if not keys:
-            keys = headings
-
-        columns = ["Point", "State"] + [
-            f"{h} [{u}]" if u else h for h, u in zip(headings, units + [""] * len(headings))
-        ]
-        self.table.setColumnCount(len(columns))
-        self.table.setHorizontalHeaderLabels(columns)
-        self.table.setRowCount(len(rows))
-
-        failed = 0
-        for r, point in enumerate(rows):
-            state = point.get("state", "")
-            if state in expl_model.FAILED_STATES:
-                failed += 1
-
-            self.table.setItem(r, 0, self._cell(point.get("point_id", "")))
-            state_cell = self._cell(state)
-            if state in expl_model.FAILED_STATES:
-                state_cell.setForeground(QtGui.QColor(200, 60, 60))
-            self.table.setItem(r, 1, state_cell)
-
-            inputs = point.get("inputs", {})
-            outputs = point.get("outputs", {})
-            for c, key in enumerate(keys):
-                if key in inputs:
-                    value = inputs[key]
-                    value = value[0] if isinstance(value, (list, tuple)) else value
-                elif key in outputs:
-                    value = outputs[key]
-                else:
-                    value = None
-                text = "" if value is None else (f"{value:g}" if isinstance(value, (int, float)) else str(value))
-                self.table.setItem(r, c + 2, self._cell(text))
-
-        self.table.resizeColumnsToContents()
-
+        self.view.set_columns(dp.columns_from_table(obj))
+        self.view.set_rows(obj.Proxy.rows(obj))
+        self.view.run_dir = obj.RunDirectory or self.view.run_dir
+        if self.study is not None:
+            try:
+                spec = api.study_spec(self.study)
+                self.view.set_defaults(
+                    {v.name: [float(v.nominal), v.unit] for v in spec.active_variables}
+                )
+            except Exception:
+                pass
         best = getattr(obj, "BestPoint", "")
-        self.summary.setText(
-            f"<b>{len(rows)} design points</b>"
-            + (f", {failed} failed" if failed else "")
-            + (f". Best: {best}" if best else "")
-            + (f"<br>Run directory: {obj.RunDirectory}" if obj.RunDirectory else "")
-        )
-
-    @staticmethod
-    def _cell(text):
-        item = QtGui.QTableWidgetItem(str(text))
-        item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-        return item
+        text = f"Best: {best}. " if best else ""
+        if obj.RunDirectory:
+            text += f"Run directory: {obj.RunDirectory}"
+        self.status.setText(text)
 
     # ---------------------------------------------------------------- actions
 
-    def export(self):
-        path, _filter = QtGui.QFileDialog.getSaveFileName(
-            self.form, "Export design points", "design_points.csv", "CSV files (*.csv)"
-        )
-        if not path:
+    def apply_point(self, row):
+        if self.study is None:
             return
-        from femexploration import api
-
-        study = self.obj.getParentGroup()
         try:
-            api.export_csv(path, study=study, run_dir=self.obj.RunDirectory or None)
-            FreeCAD.Console.PrintMessage(f"Design points written to {path}\n")
+            api.apply_point(self.study, row.get("inputs", {}))
         except Exception as exc:
-            QtGui.QMessageBox.warning(self.form, "Export failed", str(exc))
-
-    def apply_point(self):
-        """Make the model become the selected design."""
-        rows = self.table.selectionModel().selectedRows()
-        if not rows:
-            return
-        point = self.obj.Proxy.rows(self.obj)[rows[0].row()]
-        inputs = point.get("inputs", {})
-
-        study = self.obj.getParentGroup()
-        analysis = study.getParentGroup() if study is not None else None
-        if analysis is None:
-            return
-
-        from femexploration import spec as spec_module
-        from femexploration.evaluate import writer_for
-        from femtools import explorationutils
-
-        param_set = explorationutils.get_parameter_set(analysis)
-        doc = self.obj.Document
-        doc.openTransaction("Apply design point")
-        try:
-            for var_obj in explorationutils.get_inputs(param_set):
-                entry = inputs.get(var_obj.Name)
-                if entry is None:
-                    continue
-                value = entry[0] if isinstance(entry, (list, tuple)) else entry
-                target = var_obj.Target
-                if target is None:
-                    continue
-                writer_for(var_obj.TargetTypeId)(
-                    target, var_obj.TargetProperty, value, var_obj.Unit
-                )
-            doc.commitTransaction()
-        except Exception as exc:
-            doc.abortTransaction()
             QtGui.QMessageBox.warning(self.form, "Could not apply the design point", str(exc))
             return
-        doc.recompute()
-        FreeCAD.Console.PrintMessage(
-            f"Model set to design point {point.get('point_id', '')}\n"
+        FreeCAD.Console.PrintMessage(f"Model set to design point {row.get('point_id', '')}\n")
+
+    def run_points(self, points):
+        """Evaluate rows the user added or edited, in the study's child process."""
+        if self.study is None:
+            return
+        if self.tool is not None and self.tool.running():
+            self.status.setText("A run is already in progress.")
+            return
+        self.tool = explorationtools.ExplorationTools(self.study)
+        self.tool.points = list(points)
+        try:
+            self.tool.prepare()
+        except Exception as exc:
+            self.status.setText(f"Cannot run: {exc}")
+            return
+        self.tool.attach_console()
+        self.tool.process.readyReadStandardOutput.connect(self._on_output)
+        self.tool.process.finished.connect(self._on_finished)
+        self.status.setText(f"Running {len(points)} design points; see the report view for progress.")
+        self.tool.compute()
+
+    def _on_output(self):
+        # attach_console already prints; here only the table is updated
+        pass
+
+    def _on_finished(self, code, status):
+        # the tool imported the journal into the document before this fires
+        self.refresh()
+        self.status.setText(
+            self.status.text() + f"  Run finished with exit code {code}."
         )
+
+    # ------------------------------------------------------------ task dialog
 
     def getStandardButtons(self):
         return int(QtGui.QDialogButtonBox.Close)
@@ -217,6 +147,10 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         return True
 
     def reject(self):
+        if self.tool is not None and self.tool.running():
+            self.tool.cancel()
+            self.status.setText("Cancellation requested...")
+            return False
         gui_doc = self.obj.ViewObject.Document
         gui_doc.resetEdit()
         return True

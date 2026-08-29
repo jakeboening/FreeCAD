@@ -601,6 +601,7 @@ SET(FemExploration_SRCS
     femexploration/cancel.py
     femexploration/cli.py
     femexploration/engine.py
+    femexploration/events.py
     femexploration/evaluate.py
     femexploration/hashing.py
     femexploration/model.py
@@ -608,11 +609,13 @@ SET(FemExploration_SRCS
     femexploration/spec.py
     femexploration/store.py
     femexploration/version.py
+    femexploration/worker.py
 )
 
 SET(FemExplorationBackends_SRCS
     femexploration/backends/__init__.py
     femexploration/backends/base.py
+    femexploration/backends/localparallel.py
     femexploration/backends/serial.py
 )
 
@@ -628,6 +631,7 @@ SET(FemTools_SRCS
     femtools/constants.py
     femtools/errors.py
     femtools/explorationpromote.py
+    femtools/explorationtools.py
     femtools/explorationutils.py
     femtools/femutils.py
     femtools/geomtools.py
@@ -796,6 +800,7 @@ SET(FemGuiUtils_SRCS
     femguiutils/__init__.py
     femguiutils/disambiguate_solid_selection.py
     femguiutils/exploration_promote.py
+    femguiutils/exploration_designpoints.py
     femguiutils/exploration_table_model.py
     femguiutils/migrate_gui.py
     femguiutils/selection_widgets.py
