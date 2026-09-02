@@ -91,6 +91,7 @@
 #include "MainWindow.h"
 #include "Action.h"
 #include "Assistant.h"
+#include "MiddleClickConfirm.h"
 #include "BitmapFactory.h"
 #include "ComboView.h"
 #include "Command.h"
@@ -369,6 +370,8 @@ MainWindow::MainWindow(QWidget* parent, Qt::WindowFlags f)
     d->activeView = nullptr;
     d->whatsthis = false;
     d->assistant = new Assistant();
+
+    MiddleClickConfirm::install();
 
     // 1. Force Qt to switch to OpenGL mode, this prevents delay and flickering of the window
     // after opening project and prevent issues with double initialization of the window.

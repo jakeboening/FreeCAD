@@ -500,6 +500,7 @@ SOURCE_GROUP("Command" FILES ${Command_SRCS})
 SET(Dialog_CPP_SRCS
     Clipping.cpp
     DemoMode.cpp
+    MiddleClickConfirm.cpp
     Dialogs/DlgAbout.cpp
     Dialogs/DlgActivateWindowImp.cpp
     Dialogs/DlgCreateNewPreferencePackImp.cpp
@@ -544,6 +545,7 @@ SET(Dialog_CPP_SRCS
 SET(Dialog_HPP_SRCS
     Clipping.h
     DemoMode.h
+    MiddleClickConfirm.h
     Dialogs/DlgAbout.h
     Dialogs/DlgActivateWindowImp.h
     Dialogs/DlgCreateNewPreferencePackImp.h

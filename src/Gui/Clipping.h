@@ -63,11 +63,6 @@ public:
     ~Clipping() override;
 
 protected:
-    /// Middle click dismisses the panel, matching the button's use elsewhere as
-    /// "I am done here". Only over the panel's own background: clicks that land
-    /// on a child widget belong to that widget.
-    void mousePressEvent(QMouseEvent* event) override;
-
     void setupConnections();
     void onActiveDocument(const App::Document& doc);
     void onSavedViewsChanged(int);

@@ -62,6 +62,7 @@
 #include "Command.h"
 #include "Action.h"
 #include "ContextMenuToolBar.h"
+#include "MiddleClickConfirm.h"
 #include "Control.h"
 #include "Document.h"
 #include "Inventor/SoMouseWheelEvent.h"
@@ -2739,9 +2740,7 @@ SbBool NavigationStyle::confirmActiveDialog(const SoEvent* const ev)
         return false;
     }
 
-    ParameterGrp::handle hGrp =
-        App::GetApplication().GetParameterGroupByPath("User parameter:BaseApp/Preferences/View");
-    if (!hGrp->GetBool("MiddleClickConfirm", true)) {
+    if (!MiddleClickConfirm::enabled()) {
         return false;
     }
 
