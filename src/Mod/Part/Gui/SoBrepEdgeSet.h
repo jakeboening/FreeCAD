@@ -27,6 +27,7 @@
 #include <Inventor/fields/SoMFInt32.h>
 #include <Inventor/fields/SoSFColor.h>
 #include <Inventor/nodes/SoIndexedLineSet.h>
+#include <Inventor/nodes/SoNode.h>
 #include <memory>
 #include <vector>
 #include <Gui/Selection/SoFCSelectionContext.h>
@@ -39,6 +40,45 @@ namespace PartGui
 {
 
 class ViewProviderPartExt;
+
+/** Hides the geometry that follows it, without making it unpickable.
+ *
+ * The "Shaded" display mode has to traverse the edges even though it does not
+ * draw them: an SoSwitch skips its non-selected children for *every* action,
+ * ray picking included, so geometry left out of the active display mask mode
+ * produces no SoLineDetail and cannot be selected at all.  Hiding therefore has
+ * to happen during rendering rather than by omission from the graph.
+ *
+ * Raising SoShapeStyleElement's INVISIBLE flag is all it takes:
+ * SoShape::shouldGLRender() returns early on it, while nothing on the pick path
+ * consults it - SoShape::shouldRayPick() looks at SoPickStyleElement alone.
+ *
+ * An SoDrawStyle set to INVISIBLE reaches the same flag, but it can be
+ * overruled: SoDrawStyle::doAction() skips the element whenever an ancestor has
+ * set SoOverrideElement's draw style override.  SoRenderManager's HIDDEN_LINE
+ * mode does exactly that on its second pass, and FreeCAD's "Hidden Line" draw
+ * style renders through the "Shaded" mask mode - so the edges would reappear
+ * there and change a display mode that is meant to be left alone.  This node
+ * writes the flag unconditionally, so the hiding holds in every render mode.
+ *
+ * Only GLRender() is implemented, deliberately: no other action should see any
+ * difference.
+ */
+class PartGuiExport SoBrepEdgeHider: public SoNode
+{
+    using inherited = SoNode;
+
+    SO_NODE_HEADER(SoBrepEdgeHider);
+
+public:
+    static void initClass();
+    SoBrepEdgeHider();
+
+    void GLRender(SoGLRenderAction* action) override;
+
+protected:
+    ~SoBrepEdgeHider() override = default;
+};
 
 class PartGuiExport SoBrepEdgeSet: public SoIndexedLineSet
 {

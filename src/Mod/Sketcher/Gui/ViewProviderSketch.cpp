@@ -4551,6 +4551,16 @@ void ViewProviderSketch::unsetEdit(int ModNum)
 
     unsetupActiveAndInEdit();
 
+    // The camera as the sketch leaves it, kept so the jump back to the part can
+    // be played out rather than cut to.  unsetEditViewer has already run, but
+    // the camera is still the one the sketch was edited under.
+    Gui::View3DInventorViewer* viewer = nullptr;
+    if (auto* view = dynamic_cast<Gui::View3DInventor*>(getDocument()->getActiveView())) {
+        viewer = view->getViewer();
+    }
+    const Gui::View3DInventorViewer::CameraPose sketchPose =
+        viewer ? viewer->cameraPose() : Gui::View3DInventorViewer::CameraPose {};
+
     // visibility automation
     try {
         QString cmdstr =
@@ -4571,6 +4581,21 @@ void ViewProviderSketch::unsetEdit(int ModNum)
             "ViewProviderSketch",
             "unsetEdit: visibility automation failed with an error: %s \n",
             e.what());
+    }
+
+    // TempoVis puts the pre-edit camera back in one step.  Play the way there
+    // instead: it is the move into the sketch run backwards, on the same
+    // duration and easing curve.  If nothing was restored - RestoreCamera off,
+    // no TempoVis - the two poses match and there is nothing to play.
+    if (viewer) {
+        const Gui::View3DInventorViewer::CameraPose restored = viewer->cameraPose();
+        const bool moved = !(restored.position == sketchPose.position)
+            || !(restored.orientation == sketchPose.orientation)
+            || restored.zoom != sketchPose.zoom;
+        if (moved) {
+            viewer->setCameraPose(sketchPose);
+            viewer->animateCameraTo(restored);
+        }
     }
 }
 

@@ -58,6 +58,7 @@
 #include "Tree.h"
 #include "BitmapFactory.h"
 #include "Command.h"
+#include "ContextMenuToolBar.h"
 #include "Document.h"
 #include "ExpressionCompleter.h"
 #include "Macro.h"
@@ -1377,8 +1378,13 @@ void TreeWidget::contextMenuEvent(QContextMenuEvent* e)
     );
 
     if (!contextMenu.actions().isEmpty()) {
+        // NX-style icon strip, added once the menu is known to be non-empty so
+        // that it never becomes the only reason a menu is shown.  It also
+        // decides where the menu goes: the icons are anchored on the cursor.
+        const QPoint at = ContextMenuToolBar::prepare(contextMenu, "Tree", QCursor::pos());
+
         try {
-            contextMenu.exec(QCursor::pos());
+            contextMenu.exec(at);
         }
         catch (Base::Exception& e) {
             e.reportException();

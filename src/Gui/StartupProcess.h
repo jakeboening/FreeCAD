@@ -63,6 +63,7 @@ private:
     void setProcessMessages();
     void setAutoSaving();
     void checkQtSvgImageFormatSupport();
+    void setUiZoom();
     void setToolBarIconSize();
     void setWheelEventFilter();
     void setLocale();

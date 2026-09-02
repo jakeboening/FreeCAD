@@ -259,6 +259,10 @@ public:
     virtual SbBool processMotionEvent(const SoMotion3Event* const ev);
     virtual SbBool processKeyboardEvent(const SoKeyboardEvent* const event);
     virtual SbBool processClickEvent(const SoMouseButtonEvent* const event);
+    /// Raise the icon-only quick menu, if this workbench asks for one.
+    void openQuickMenu();
+    /// Middle click with a task dialog open means "done"; @return whether it did.
+    SbBool confirmActiveDialog(const SoEvent* const ev);
     virtual SbBool processWheelEvent(const SoMouseWheelEvent* const event);
 
     void setPopupMenuEnabled(const SbBool on);
@@ -413,7 +417,12 @@ protected:
     SbVec2s localPos;
     SbPlane panningplane;
     SbTime centerTime;
+    /// When and where the middle button went down, to tell a tap from a pan.
+    SbTime middleDownTime;
+    SbVec2s middleDownPos;
     SbBool lockrecenter;
+    /// Set while an event must not be allowed to recentre the view.
+    SbBool suppressRecenter {false};
     SbBool menuenabled;
     SbBool ctrldown, shiftdown, altdown;
     SbBool button1down, button2down, button3down;

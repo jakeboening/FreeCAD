@@ -100,11 +100,14 @@
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
+#include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QScopeGuard>
 #include <QSurfaceFormat>
 #include <QTimer>
+#include <QAbstractAnimation>
 #include <QVariantAnimation>
 #include <QWheelEvent>
 
@@ -123,6 +126,9 @@
 #include <Gui/BitmapFactory.h>
 
 #include "View3DInventorViewer.h"
+#include "ViewClipping.h"
+#include "ClippingCapRenderer.h"
+#include "Inventor/SoFCClippingCap.h"
 #include "Application.h"
 #include "Camera.h"
 #include "Command.h"
@@ -990,6 +996,9 @@ View3DInventorViewer::View3DInventorViewer(QWidget* parent, const QOpenGLWidget*
     : Quarter::SoQTQuarterAdaptor(parent, sharewidget)
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
+    , clippedContent(nullptr)
+    , capNode(nullptr)
+    , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
     , renderType(Native)
@@ -1014,6 +1023,9 @@ View3DInventorViewer::View3DInventorViewer(
     : Quarter::SoQTQuarterAdaptor(format, parent, sharewidget)
     , SelectionObserver(false, ResolveMode::NoResolve)
     , editViewProvider(nullptr)
+    , clippedContent(nullptr)
+    , capNode(nullptr)
+    , clipGroup(nullptr)
     , objectGroup(nullptr)
     , navigation(nullptr)
     , renderType(Native)
@@ -1230,11 +1242,42 @@ void View3DInventorViewer::init()
     pcEditingRoot->addChild(pcEditingTransform);
     pcViewProviderRoot->addChild(pcEditingRoot);
 
+    // The clipping planes and the geometry they act on, wrapped together in a
+    // separator. Everything added to pcViewProviderRoot before this point - the
+    // editing root, the dimensions, the on-top selection - is outside it and so
+    // is not clipped; and because it is a separator rather than a group, neither
+    // is anything appended after it. That second part matters: view providers
+    // that answer false to isPartOfPhysicalObject(), measurements among them, are
+    // deliberately kept out of the object group, and are then appended here. A
+    // plain group would have let the planes reach them anyway and clipped the
+    // very annotations that say what the model measures.
+    clippedContent = new SoSeparator();
+    clippedContent->ref();
+    clippedContent->setName("ClippedContent");
+    pcViewProviderRoot->addChild(clippedContent);
+
+    clipGroup = new SoGroup();
+    clipGroup->ref();
+    clipGroup->setName("ClipPlanes");
+    clippedContent->addChild(clipGroup);
+
     // Create group for the physical object
     objectGroup = new SoGroup();
     objectGroup->ref();
     objectGroup->setName("ObjectGroup");
-    pcViewProviderRoot->addChild(objectGroup);
+    clippedContent->addChild(objectGroup);
+
+    // After the model rather than inside it, so the depth buffer is already
+    // complete; and outside clippedContent, because within that separator the
+    // traversal still has the clipping planes enabled in OpenGL and they would
+    // clip away the very quad the cap is drawn from. Being in the graph at all
+    // is what puts the caps ahead of Coin's delayed annotations instead of on
+    // top of them.
+    capNode = new SoFCClippingCap();
+    capNode->ref();
+    capNode->setName("ClippingCap");
+    capNode->setViewer(this);
+    pcViewProviderRoot->addChild(capNode);
 
     // Set our own render action which show a bounding box if
     // the SoFCSelection::BOX style is set
@@ -1366,11 +1409,21 @@ View3DInventorViewer::~View3DInventorViewer()
     // the root node but isn't destroyed when closing this viewer so
     // that it prevents all children from being deleted. To reduce this
     // likelihood we explicitly remove all child nodes now.
+    // Before the graph goes: these hold nodes inside it.
+    capRenderer.reset();
+    clippingState.reset();
+
     coinRemoveAllChildren(this->pcViewProviderRoot);
     this->pcViewProviderRoot->unref();
     this->pcViewProviderRoot = nullptr;
     this->objectGroup->unref();
     this->objectGroup = nullptr;
+    this->clipGroup->unref();
+    this->clipGroup = nullptr;
+    this->clippedContent->unref();
+    this->clippedContent = nullptr;
+    this->capNode->unref();
+    this->capNode = nullptr;
     this->backlight->unref();
     this->backlight = nullptr;
     this->fillLight->unref();
@@ -1645,6 +1698,93 @@ void View3DInventorViewer::setEditingTransform(const Base::Matrix4D& mat)
 SoNode* View3DInventorViewer::getEditingRoot() const
 {
     return pcEditingRoot;
+}
+
+SoGroup* View3DInventorViewer::getClipPlaneGroup() const
+{
+    return this->clipGroup;
+}
+
+ViewClipping& View3DInventorViewer::clipping()
+{
+    if (!clippingState) {
+        clippingState = std::make_unique<ViewClipping>(*this);
+    }
+    return *clippingState;
+}
+
+bool View3DInventorViewer::hasClipping() const
+{
+    return clippingState != nullptr;
+}
+
+int View3DInventorViewer::stencilBits() const
+{
+    return stencilBitCount;
+}
+
+void View3DInventorViewer::renderClippingCaps()
+{
+    // Nothing to do for the overwhelmingly common case of a view that is not
+    // clipped, so this stays cheap enough to call unconditionally per frame.
+    if (!clippingState || !clippingState->state().anyCapEnabled()) {
+        return;
+    }
+    if (stencilBitCount == 0) {
+        return;
+    }
+
+    if (!capRenderer) {
+        capRenderer = std::make_unique<ClippingCapRenderer>(*this);
+    }
+    capRenderer->render(clippingState->state());
+}
+
+void View3DInventorViewer::probeStencilBits() const
+{
+    if (stencilBitCount >= 0) {
+        return;
+    }
+
+    // Asking QSurfaceFormat is not good enough: for a QOpenGLWidget that
+    // describes the context, while the drawing actually goes to a framebuffer
+    // object Qt manages, whose attachments are what matter here. So ask GL,
+    // and only once the context is current.
+    GLint bits = 0;
+    glGetIntegerv(GL_STENCIL_BITS, &bits);
+
+    if (bits == 0) {
+        if (QOpenGLContext* context = QOpenGLContext::currentContext()) {
+            GLint type = GL_NONE;
+            context->functions()->glGetFramebufferAttachmentParameteriv(
+                GL_FRAMEBUFFER,
+                GL_STENCIL_ATTACHMENT,
+                GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+                &type
+            );
+            if (type != GL_NONE) {
+                context->functions()->glGetFramebufferAttachmentParameteriv(
+                    GL_FRAMEBUFFER,
+                    GL_STENCIL_ATTACHMENT,
+                    GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE,
+                    &bits
+                );
+            }
+        }
+    }
+
+    stencilBitCount = bits;
+
+    if (bits == 0) {
+        Base::Console().warning(
+            "No stencil buffer in this OpenGL context; clipping caps are unavailable.\n"
+        );
+    }
+}
+
+SoGroup* View3DInventorViewer::getObjectGroup() const
+{
+    return this->objectGroup;
 }
 
 void View3DInventorViewer::setupEditingRoot(SoNode* node, const Base::Matrix4D* mat)
@@ -2975,7 +3115,9 @@ void View3DInventorViewer::setRenderType(RenderType type)
                 gl->makeCurrent();
                 QOpenGLFramebufferObjectFormat fboFormat;
                 fboFormat.setSamples(getNumSamples());
-                fboFormat.setAttachment(QOpenGLFramebufferObject::Depth);
+                // CombinedDepthStencil, not Depth: without a stencil attachment
+                // the clipping caps cannot be drawn into a saved image.
+                fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
                 auto fbo = new QOpenGLFramebufferObject(width, height, fboFormat);
                 if (fbo->format().samples() > 0 && hasFramebufferBlitSupport()) {
                     if (!renderToFramebuffer(fbo)) {
@@ -2995,7 +3137,9 @@ void View3DInventorViewer::setRenderType(RenderType type)
                         );
                         delete fbo;
                         QOpenGLFramebufferObjectFormat fallbackFormat;
-                        fallbackFormat.setAttachment(QOpenGLFramebufferObject::Depth);
+                        fallbackFormat.setAttachment(
+                            QOpenGLFramebufferObject::CombinedDepthStencil
+                        );
                         fbo = new QOpenGLFramebufferObject(width, height, fallbackFormat);
                     }
                     if (!renderToFramebuffer(fbo)) {
@@ -3055,7 +3199,7 @@ QImage View3DInventorViewer::renderToImage(const RenderImageOptions& options)
 
     QOpenGLFramebufferObjectFormat fboFormat;
     fboFormat.setSamples(samples);
-    fboFormat.setAttachment(QOpenGLFramebufferObject::Depth);
+    fboFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
     // With enabled alpha a transparent background is supported but
     // at the same time breaks semi-transparent models. A workaround
     // is to use a certain background color using GL_RGB as texture
@@ -3382,6 +3526,10 @@ void View3DInventorViewer::renderScene()
     SbVec2s origin = vp.getViewportOriginPixels();
     SbVec2s size = vp.getViewportSizePixels();
     glViewport(origin[0], origin[1], size[0], size[1]);
+
+    // First frame: the context is current here, which is the only place it is
+    // safe to ask what we actually got.
+    probeStencilBits();
 
     const QColor col = this->backgroundColor();
     glClearColor(float(col.redF()), float(col.greenF()), float(col.blueF()), 0.0F);
@@ -5034,6 +5182,102 @@ void View3DInventorViewer::startSpinningAnimation(const SbVec3f& axis, float vel
 void View3DInventorViewer::stopAnimating()
 {
     navigation->stopAnimating();
+}
+
+View3DInventorViewer::CameraPose View3DInventorViewer::cameraPose() const
+{
+    CameraPose pose;
+
+    SoCamera* camera = getSoRenderManager()->getCamera();
+    if (!camera) {
+        return pose;
+    }
+
+    pose.position = camera->position.getValue();
+    pose.orientation = camera->orientation.getValue();
+    pose.focalDistance = camera->focalDistance.getValue();
+
+    if (camera->isOfType(SoOrthographicCamera::getClassTypeId())) {
+        pose.zoom = static_cast<SoOrthographicCamera*>(camera)->height.getValue();
+    }
+    else if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
+        pose.zoom = static_cast<SoPerspectiveCamera*>(camera)->heightAngle.getValue();
+    }
+
+    return pose;
+}
+
+void View3DInventorViewer::setCameraPose(const CameraPose& pose)
+{
+    SoCamera* camera = getSoRenderManager()->getCamera();
+    if (!camera) {
+        return;
+    }
+
+    camera->position = pose.position;
+    camera->orientation = pose.orientation;
+    camera->focalDistance = pose.focalDistance;
+
+    if (pose.zoom > 0.0F) {
+        if (camera->isOfType(SoOrthographicCamera::getClassTypeId())) {
+            static_cast<SoOrthographicCamera*>(camera)->height = pose.zoom;
+        }
+        else if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
+            static_cast<SoPerspectiveCamera*>(camera)->heightAngle = pose.zoom;
+        }
+    }
+}
+
+void View3DInventorViewer::animateCameraTo(const CameraPose& pose, int duration)
+{
+    const CameraPose from = cameraPose();
+
+    if (!isAnimationEnabled()) {
+        setCameraPose(pose);
+        return;
+    }
+
+    ParameterGrp::handle hGrp =
+        App::GetApplication().GetParameterGroupByPath("User parameter:BaseApp/Preferences/View");
+    if (duration < 0) {
+        duration = static_cast<int>(hGrp->GetInt("AnimationDuration", 500));
+    }
+    const auto easing = static_cast<QEasingCurve::Type>(
+        hGrp->GetInt("NavigationAnimationEasingCurve", QEasingCurve::Type::InOutCubic)
+    );
+
+    // Whatever the navigation style was doing to the camera, this supersedes it.
+    stopAnimating();
+
+    auto* animation = new QVariantAnimation(this);
+    animation->setStartValue(0.0F);
+    animation->setEndValue(1.0F);
+    animation->setDuration(duration);
+    animation->setEasingCurve(easing);
+
+    connect(animation, &QVariantAnimation::valueChanged, this, [this, from, pose](const QVariant& value) {
+        const float t = value.toFloat();
+
+        CameraPose step;
+        step.position = from.position * (1.0F - t) + pose.position * t;
+        step.orientation = SbRotation::slerp(from.orientation, pose.orientation, t);
+        step.focalDistance = from.focalDistance * (1.0F - t) + pose.focalDistance * t;
+
+        // Zoom is a ratio, not a distance: interpolated geometrically it reads as
+        // one steady movement rather than a rush followed by a crawl.
+        step.zoom = (from.zoom > 0.0F && pose.zoom > 0.0F)
+            ? from.zoom * std::pow(pose.zoom / from.zoom, t)
+            : from.zoom * (1.0F - t) + pose.zoom * t;
+
+        setCameraPose(step);
+    });
+
+    // The last frame lands on the pose itself rather than on an interpolation of it.
+    connect(animation, &QVariantAnimation::finished, this, [this, pose]() {
+        setCameraPose(pose);
+    });
+
+    animation->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void View3DInventorViewer::setPopupMenuEnabled(bool on)

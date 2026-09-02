@@ -249,13 +249,48 @@ dot/period will always be printed</string>
         </widget>
        </item>
        <item row="3" column="0">
+        <widget class="QLabel" name="uiZoomLabel">
+         <property name="text">
+          <string>Interface zoom</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="Gui::PrefSpinBox" name="UiZoom">
+         <property name="toolTip">
+          <string>Scales the whole interface: text, icons and spacing. Does not affect the 3D view.</string>
+         </property>
+         <property name="minimum">
+          <number>50</number>
+         </property>
+         <property name="maximum">
+          <number>300</number>
+         </property>
+         <property name="singleStep">
+          <number>10</number>
+         </property>
+         <property name="suffix">
+          <string> %</string>
+         </property>
+         <property name="value">
+          <number>100</number>
+         </property>
+         <property name="prefEntry" stdset="0">
+          <cstring>UiZoom</cstring>
+         </property>
+         <property name="prefPath" stdset="0">
+          <cstring>MainWindow</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0">
         <widget class="QLabel" name="treeModeLabel">
          <property name="text">
           <string>Tree View and Property View mode</string>
          </property>
         </widget>
        </item>
-       <item row="3" column="1">
+       <item row="4" column="1">
         <widget class="QComboBox" name="treeMode">
          <property name="toolTip">
           <string>Customize how the tree view is shown in the panel (restart required).
@@ -265,14 +300,14 @@ dot/period will always be printed</string>
          </property>
         </widget>
        </item>
-       <item row="4" column="0">
+       <item row="5" column="0">
         <widget class="QLabel" name="recentFileListLabel">
          <property name="text">
           <string>Size of recent file list</string>
          </property>
         </widget>
        </item>
-       <item row="4" column="1">
+       <item row="5" column="1">
         <widget class="Gui::PrefSpinBox" name="RecentFiles">
          <property name="toolTip">
           <string>How many files should be listed in recent files list</string>
@@ -288,7 +323,7 @@ dot/period will always be printed</string>
          </property>
         </widget>
        </item>
-       <item row="5" column="0">
+       <item row="6" column="0">
         <widget class="QCheckBox" name="tiledBackground">
          <property name="toolTip">
           <string>Background of the main window (when no document is opened) will consist of tiles of an image.</string>
@@ -298,7 +333,7 @@ dot/period will always be printed</string>
          </property>
         </widget>
        </item>
-       <item row="5" column="1">
+       <item row="6" column="1">
         <widget class="Gui::PrefCheckBox" name="EnableCursorBlinking">
          <property name="toolTip">
           <string>The text cursor will be blinking</string>
@@ -317,7 +352,7 @@ dot/period will always be printed</string>
          </property>
         </widget>
        </item>
-       <item row="6" column="0">
+       <item row="7" column="0">
         <widget class="Gui::PrefCheckBox" name="SplashScreen">
          <property name="toolTip">
           <string>A splash screen is a small loading window that is shown
@@ -338,7 +373,7 @@ display the splash screen.</string>
          </property>
         </widget>
        </item>
-       <item row="6" column="1">
+       <item row="7" column="1">
         <widget class="Gui::PrefCheckBox" name="ActivateOverlay">
          <property name="toolTip">
           <string>Activate overlay handling of docked panels</string>
@@ -357,7 +392,7 @@ display the splash screen.</string>
          </property>
         </widget>
        </item>
-       <item row="7" column="0">
+       <item row="8" column="0">
         <widget class="Gui::PrefCheckBox" name="FineGrainedRecompute">
          <property name="toolTip">
           <string>Activate fine-grained recomputation of documents</string>

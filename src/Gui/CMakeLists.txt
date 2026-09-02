@@ -897,6 +897,8 @@ SOURCE_GROUP("Widget\\QSintActionPanel\\Mocs" FILES ${qsint_MOC_SRCS})
 # The 3d view
 SET(View3D_CPP_SRCS
     Camera.cpp
+    ClippingCapRenderer.cpp
+    ClippingState.cpp
     Flag.cpp
     GLBuffer.cpp
     GLPainter.cpp
@@ -909,6 +911,7 @@ SET(View3D_CPP_SRCS
     View3DInventorSelection.cpp
     View3DInventorViewer.cpp
     View3DInventorRiftViewer.cpp
+    ViewClipping.cpp
     View3DSettings.cpp
     CoinRiftWidget.cpp
     View3DPy.cpp
@@ -918,6 +921,8 @@ SET(View3D_CPP_SRCS
 SET(View3D_SRCS
     ${View3D_CPP_SRCS}
     Camera.h
+    ClippingCapRenderer.h
+    ClippingState.h
     Flag.h
     GLBuffer.h
     RubberbandOverlay.h
@@ -929,6 +934,7 @@ SET(View3D_SRCS
     View3DInventor.h
     View3DInventorSelection.h
     View3DInventorViewer.h
+    ViewClipping.h
     View3DPy.h
     View3DInventorRiftViewer.h
     View3DSettings.h
@@ -1084,6 +1090,7 @@ SET(Inventor_CPP_SRCS
     Inventor/SoDrawingGrid.cpp
     Inventor/SoFCScreenSpaceGroup.cpp
     Inventor/SoFCBackgroundGradient.cpp
+    Inventor/SoFCClippingCap.cpp
     Inventor/SoFCBoundingBox.cpp
     Inventor/SoNaviCube.cpp
     Inventor/SoMouseWheelEvent.cpp
@@ -1126,6 +1133,7 @@ SET(Inventor_SRCS
     Inventor/SoDrawingGrid.h
     Inventor/SoFCScreenSpaceGroup.h
     Inventor/SoFCBackgroundGradient.h
+    Inventor/SoFCClippingCap.h
     Inventor/SoFCBoundingBox.h
     Inventor/SoNaviCube.h
     Inventor/SoMouseWheelEvent.h
@@ -1274,6 +1282,7 @@ SOURCE_GROUP("View" FILES ${View_SRCS})
 
 # The workbench sources
 SET(Workbench_CPP_SRCS
+    ContextMenuToolBar.cpp
     DockWindowManager.cpp
     OverlayManager.cpp
     OverlayWidgets.cpp
@@ -1291,6 +1300,7 @@ SET(Workbench_CPP_SRCS
 )
 SET(Workbench_SRCS
     ${Workbench_CPP_SRCS}
+    ContextMenuToolBar.h
     DockWindowManager.h
     OverlayManager.h
     OverlayWidgets.h
@@ -1368,6 +1378,7 @@ SET(FreeCADGui_CPP_SRCS
     WaitCursor.cpp
     ManualAlignment.cpp
     StartupProcess.cpp
+    UiZoom.cpp
     TransactionObject.cpp
     ToolHandler.cpp
     StyleParameters/Value.cpp
@@ -1415,6 +1426,7 @@ SET(FreeCADGui_SRCS
     WaitCursor.h
     ManualAlignment.h
     StartupProcess.h
+    UiZoom.h
     StatusBarLabel.h
     TransactionObject.h
     ToolHandler.h

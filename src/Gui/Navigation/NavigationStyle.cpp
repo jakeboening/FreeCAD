@@ -40,6 +40,8 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QCoreApplication>
+#include <QTimer>
 #include <QByteArray>
 #include <QCursor>
 #include <QMenu>
@@ -59,6 +61,8 @@
 #include "Camera.h"
 #include "Command.h"
 #include "Action.h"
+#include "ContextMenuToolBar.h"
+#include "Control.h"
 #include "Document.h"
 #include "Inventor/SoMouseWheelEvent.h"
 #include "MenuManager.h"
@@ -70,6 +74,8 @@
 #include "View3DInventorViewer.h"
 #include "ViewParams.h"
 #include "ViewProviderDocumentObject.h"
+#include "Workbench.h"
+#include "WorkbenchManager.h"
 
 using namespace Gui;
 
@@ -585,6 +591,10 @@ void NavigationStyle::lookAtPoint(const SbVec2s screenpos)
         return;
     }
 
+    if (this->suppressRecenter) {
+        return;
+    }
+
     SoRayPickAction rpaction(viewer->getViewportRegion());
     rpaction.setPoint(screenpos);
     rpaction.setRadius(viewer->getPickRadius());
@@ -617,6 +627,10 @@ void NavigationStyle::lookAtPoint(const SbVec2s screenpos)
 
 void NavigationStyle::lookAtPoint(const SbVec3f& position)
 {
+    if (this->suppressRecenter) {
+        return;
+    }
+
     translateCamera(position - viewer->getFocalPoint());
     this->rotationCenter = position;
     this->rotationCenterFound = true;
@@ -2272,16 +2286,28 @@ SbBool NavigationStyle::processEvent(const SoEvent* const ev)
         }
     }
 
+    // Remembered before the navigation styles get at the event, since only some
+    // of them keep the middle button's own press time.
+    if (SoMouseButtonEvent::isButtonPressEvent(ev, SoMouseButtonEvent::BUTTON3)) {
+        this->middleDownTime = ev->getTime();
+        this->middleDownPos = ev->getPosition();
+    }
+    else {
+        confirmActiveDialog(ev);
+    }
+
     const ViewerMode curmode = this->currentmode;
 
     SbBool processed = false;
     processed = this->processSoEvent(ev);
+    this->suppressRecenter = false;
 
     // check for left click without selecting something
     if ((curmode == NavigationStyle::SELECTION || curmode == NavigationStyle::IDLE) && !processed) {
         if (SoMouseButtonEvent::isButtonReleaseEvent(ev, SoMouseButtonEvent::BUTTON1)) {
             if (!ev->wasCtrlDown()) {
                 Gui::Selection().clearSelection();
+                openQuickMenu();
             }
         }
     }
@@ -2683,9 +2709,78 @@ void NavigationStyle::openPopupMenu(const SbVec2s& position)
 
     QObject::connect(contextMenu, &QMenu::triggered, clarifyFunction);
 
-    contextMenu->popup(QCursor::pos());
+    // NX-style icon strip, added last so it sits above everything the
+    // workbenches and view providers contributed, and anchored so its icons
+    // land on the cursor rather than the menu's own corner.
+    contextMenu->popup(ContextMenuToolBar::prepare(*contextMenu, "View", QCursor::pos()));
 
     rightClickPosition.reset();
+}
+
+void NavigationStyle::openQuickMenu()
+{
+    // Inside an editing session the left button belongs to whatever is being
+    // edited - placing sketch geometry, dragging a dragger.
+    if (viewer->isEditing()) {
+        return;
+    }
+
+    Workbench* workbench = WorkbenchManager::instance()->active();
+    if (!workbench || !ContextMenuToolBar::quickMenuWantedFor(workbench->name().c_str())) {
+        return;
+    }
+
+    ContextMenuToolBar::popupQuickMenu(viewer->getGLWidget(), QCursor::pos());
+}
+
+SbBool NavigationStyle::confirmActiveDialog(const SoEvent* const ev)
+{
+    if (!SoMouseButtonEvent::isButtonReleaseEvent(ev, SoMouseButtonEvent::BUTTON3)) {
+        return false;
+    }
+
+    ParameterGrp::handle hGrp =
+        App::GetApplication().GetParameterGroupByPath("User parameter:BaseApp/Preferences/View");
+    if (!hGrp->GetBool("MiddleClickConfirm", true)) {
+        return false;
+    }
+
+    // A tap, not the end of a pan: the middle button also drives navigation, and
+    // finishing a pan over the viewport must not close the dialog behind it.
+    const double interval = QApplication::doubleClickInterval() / 1000.0;
+    if ((ev->getTime() - this->middleDownTime).getValue() >= interval) {
+        return false;
+    }
+
+    const SbVec2s moved = ev->getPosition() - this->middleDownPos;
+    if (std::abs(moved[0]) > 2 || std::abs(moved[1]) > 2) {
+        return false;
+    }
+
+    if (!Gui::Control().activeDialog()) {
+        return false;
+    }
+
+    // Accepting tears down the dialog, and with it whatever is being edited, so
+    // it happens once this event is off the stack rather than underneath it.
+    QTimer::singleShot(0, QCoreApplication::instance(), []() {
+        if (Gui::Control().activeDialog()) {
+            Gui::Control().accept();
+        }
+    });
+
+    // The event is deliberately not consumed.  Swallowing the release would
+    // leave the navigation style believing the middle button is still down, and
+    // the next mouse move would drag the view around - worse still for the
+    // state chart styles, whose machine would sit in the wrong state.  It goes
+    // through, winding the style back to idle, and what it must not also do -
+    // recentre the view on the click - is suppressed for the rest of this
+    // event.  The suppression sits in lookAtPoint rather than in a per-style
+    // flag because the styles do not agree on one: CAD honours lockrecenter,
+    // the Siemens NX chart calls lookAtPoint straight out of its state.
+    this->suppressRecenter = true;
+
+    return true;
 }
 
 PyObject* NavigationStyle::getPyObject()

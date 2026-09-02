@@ -109,6 +109,9 @@ class GLGraphicsItem;
 class RubberbandOverlay;
 class SoShapeScale;
 class ViewerEventFilter;
+class ViewClipping;
+class ClippingCapRenderer;
+class SoFCClippingCap;
 
 /** GUI view into a 3D scene provided by View3DInventor
  *
@@ -220,6 +223,25 @@ public:
     void startSpinningAnimation(const SbVec3f& axis, float velocity);
     void stopAnimating();
 
+    /// Everything needed to put the camera back exactly where it was.
+    struct CameraPose
+    {
+        SbVec3f position;
+        SbRotation orientation;
+        float focalDistance {1.0F};
+        /// height for an orthographic camera, heightAngle for a perspective one
+        float zoom {0.0F};
+    };
+
+    CameraPose cameraPose() const;
+    void setCameraPose(const CameraPose& pose);
+    /**
+     * Glide the camera to @a pose over the duration and easing curve the
+     * navigation animations use, so a move back matches the move out.
+     * Applies the pose outright when animation is switched off.
+     */
+    void animateCameraTo(const CameraPose& pose, int duration = -1);
+
     void setPopupMenuEnabled(bool on);
     bool isPopupMenuEnabled() const;
 
@@ -288,6 +310,32 @@ public:
     /// reset from edit mode
     void resetEditingViewProvider();
     SoNode* getEditingRoot() const;
+    /// Group the clipping planes live in, ahead of the model geometry.
+    SoGroup* getClipPlaneGroup() const;
+    /** Clipping of this view: the planes, their cap settings and their state.
+     *
+     * Created on first use. It lives here rather than in the Clipping panel so
+     * that it outlives the panel and can be saved with the document.
+     */
+    ViewClipping& clipping();
+    /// True when clipping exists, for callers that must not bring it into being.
+    bool hasClipping() const;
+    /** Stencil bits this view's OpenGL context actually gives us.
+     *
+     * -1 until the first frame has been drawn, 0 when there is no stencil
+     * buffer at all - in which case the clipping caps cannot be rendered and
+     * the panel says so instead of showing controls that do nothing.
+     */
+    int stencilBits() const;
+    /** Fills the cross-sections the clipping planes expose.
+     *
+     * Called from the SoFCClippingCap node during the scene traversal, once the
+     * model is drawn and before Coin's delayed annotation pass. No-op unless a
+     * plane actually asks for a cap.
+     */
+    void renderClippingCaps();
+    /// Group holding the view providers of the physical objects.
+    SoGroup* getObjectGroup() const;
     void setupEditingRoot(SoNode* node = nullptr, const Base::Matrix4D* mat = nullptr);
     void resetEditingRoot(bool updateLinks = true);
     void setEditingTransform(const Base::Matrix4D& mat);
@@ -671,6 +719,21 @@ private:
 
     // Scene graph root
     SoSeparator* pcViewProviderRoot;
+    // Separator holding the clipping planes and the geometry they act on. Being a
+    // separator is the point: it stops the planes reaching anything added to
+    // pcViewProviderRoot afterwards, such as measurements.
+    SoSeparator* clippedContent;
+    // Sits right after clippedContent: after the model, and outside the planes.
+    SoFCClippingCap* capNode;
+    // Holds the clipping planes of the Clipping panel. It sits immediately before
+    // objectGroup inside clippedContent, so the planes clip the model and nothing
+    // else.
+    SoGroup* clipGroup;
+    std::unique_ptr<ViewClipping> clippingState;
+    mutable int stencilBitCount {-1};
+    std::unique_ptr<ClippingCapRenderer> capRenderer;
+    /// Fills stencilBitCount on the first frame; needs a current context.
+    void probeStencilBits() const;
     // Child group in the scene graph that contains view providers related to the physical object
     SoGroup* objectGroup;
 

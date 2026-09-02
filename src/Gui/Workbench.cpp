@@ -737,10 +737,17 @@ MenuItem* StdWorkbench::setupMenuBar() const
               << "Separator" << "Std_ViewRotateLeft" << "Std_ViewRotateRight" << "Separator"
               << "Std_StoreWorkingView" << "Std_RecallWorkingView";
 
-    // zoom
+    // zoom (the camera; the interface zoom below is a different thing)
     auto zoom = new MenuItem;
     zoom->setCommand("&Zoom");
     *zoom << "Std_ViewZoomIn" << "Std_ViewZoomOut" << "Separator" << "Std_ViewBoxZoom";
+
+    // Interface zoom - scales the chrome, not the camera. It sits with the
+    // other UI-chrome entries further down the View menu, deliberately not
+    // inside the camera zoom submenu above.
+    auto uizoom = new MenuItem;
+    uizoom->setCommand("Interface &Zoom");
+    *uizoom << "Std_UiZoomIn" << "Std_UiZoomOut" << "Separator" << "Std_UiZoomReset";
 
     // Visibility
     auto visu = new MenuItem;
@@ -770,7 +777,8 @@ MenuItem* StdWorkbench::setupMenuBar() const
           << "Separator"
           << "Std_Workbench"
           << "Std_ToolBarMenu"
-          << "Std_DockViewMenu";
+          << "Std_DockViewMenu"
+          << uizoom;
     if (DockWindowManager::instance()->isOverlayActivated()) {
         *view << "Std_DockOverlay";
     }

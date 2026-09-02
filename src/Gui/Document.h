@@ -29,6 +29,7 @@
 #include <QString>
 
 #include <Base/Persistence.h>
+#include <Gui/ClippingState.h>
 #include <Gui/TreeItemMode.h>
 
 class SoNode;
@@ -345,6 +346,19 @@ public:
     const char* getCameraSettings() const;
     bool saveCameraSettings(const char*) const;
 
+    /// The clipping written into GuiDocument.xml, and used to seed a new 3D view.
+    const ClippingState& getClippingSettings() const;
+    /** The document's named clipping views.
+     *
+     * Unlike the active clipping, which rides along with the next save the way
+     * the camera does, adding or removing one of these is an edit the user made
+     * on purpose, so it marks the document modified.
+     */
+    const NamedClippingViews& getClippingViews() const;
+    void setClippingViews(const NamedClippingViews& views);
+    /// Remembers a view's clipping, so it outlives that view being closed.
+    void saveClippingSettings(const ClippingState& settings) const;
+
     /// get all tree root objects (objects that are at the root of the object tree)
     std::vector<App::DocumentObject*> getTreeRootObjects() const;
 
@@ -369,6 +383,10 @@ private:
     static int _iDocCount;
 
     mutable std::string cameraSettings;
+    /// Mutable for the same reason as cameraSettings: SaveDocFile() is const.
+    mutable ClippingState clippingSettings;
+    NamedClippingViews clippingViews;
+    mutable bool hasClippingSettings {false};
 
     /** @name attributes for the UNDO REDO facility
      */

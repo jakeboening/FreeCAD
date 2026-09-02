@@ -54,6 +54,7 @@
 #include "Language/Translator.h"
 #include "Dialogs/DlgVersionMigrator.h"
 #include "FreeCADStyle.h"
+#include "UiZoom.h"
 
 #include <App/Application.h>
 #include <App/ApplicationDirectories.h>
@@ -225,6 +226,7 @@ void StartupPostProcess::execute()
     setProcessMessages();
     setAutoSaving();
     checkQtSvgImageFormatSupport();
+    setUiZoom();
     setToolBarIconSize();
     setWheelEventFilter();
     setLocale();
@@ -278,6 +280,14 @@ void StartupPostProcess::checkQtSvgImageFormatSupport()
     }
 }
 
+void StartupPostProcess::setUiZoom()
+{
+    // Captures the base application font and attaches the parameter observer.
+    // Runs before setToolBarIconSize() and setStyleSheet() so the window is
+    // drawn at the right size rather than resized after the first paint.
+    UiZoom::initialize();
+}
+
 void StartupPostProcess::setToolBarIconSize()
 {
     // set toolbar icon size
@@ -285,6 +295,10 @@ void StartupPostProcess::setToolBarIconSize()
     int size = int(hGrp->GetInt("ToolbarIconSize", 0));
     // must not be lower than this
     if (size >= 16) {  // NOLINT
+        // Matches ToolBarManager::toolBarIconSize(), which applies the interface
+        // zoom on top of the stored base size. Without it the window would open
+        // with unzoomed icons until the manager's first refresh.
+        size = UiZoom::instance().scaled(size);
         mainWindow->setIconSize(QSize(size, size));
     }
 }

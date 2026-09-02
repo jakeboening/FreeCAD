@@ -25,8 +25,11 @@
 
 /// Qt Include Files
 #include <Inventor/sensors/SoSensor.h>
+#include <QAbstractSpinBox>
 #include <QApplication>
 #include <QDialog>
+#include <QLineEdit>
+#include <QMouseEvent>
 
 
 #include <Base/Tools.h>
@@ -209,6 +212,17 @@ int EditDatumDialog::exec(bool atCursor)
         connect(&dlg, &QDialog::accepted, this, &EditDatumDialog::accepted);
         connect(&dlg, &QDialog::rejected, this, &EditDatumDialog::rejected);
 
+        // Watched on the dialog and on its widgets, so a middle click anywhere
+        // over the box accepts it.  The text entries are skipped: the middle
+        // button pastes the primary selection there, which is worth more than a
+        // second way to accept.
+        dlg.installEventFilter(this);
+        for (QWidget* child : dlg.findChildren<QWidget*>()) {
+            if (!qobject_cast<QAbstractSpinBox*>(child) && !qobject_cast<QLineEdit*>(child)) {
+                child->installEventFilter(this);
+            }
+        }
+
         if (atCursor) {
             dlg.show();  // Need to show the dialog so geometry is computed
             QRect pg = dlg.parentWidget()->geometry();
@@ -253,6 +267,23 @@ void EditDatumDialog::typeChanged(bool checked)
             dlg->setWindowTitle(tr("Insert Diameter"));
         }
     }
+}
+
+bool EditDatumDialog::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonPress
+        && static_cast<QMouseEvent*>(event)->button() == Qt::MiddleButton) {
+        // The dialog is a local in exec(), so it is reached through the widget
+        // the click landed on rather than being held onto.
+        if (auto* widget = qobject_cast<QWidget*>(watched)) {
+            if (auto* dialog = qobject_cast<QDialog*>(widget->window())) {
+                dialog->accept();
+                return true;
+            }
+        }
+    }
+
+    return QObject::eventFilter(watched, event);
 }
 
 void EditDatumDialog::accepted()

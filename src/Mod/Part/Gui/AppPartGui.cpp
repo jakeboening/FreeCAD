@@ -163,6 +163,7 @@ PyMOD_INIT_FUNC(PartGui)
     PartGui::PropertyEnumAttacherItem               ::init();
     PartGui::SoBrepFaceSet                          ::initClass();
     PartGui::SoBrepEdgeSet                          ::initClass();
+    PartGui::SoBrepEdgeHider                        ::initClass();
     PartGui::SoBrepPointSet                         ::initClass();
     PartGui::SoFCControlPoints                      ::initClass();
     PartGui::SoFCShape                              ::initClass();

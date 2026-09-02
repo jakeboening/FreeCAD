@@ -32,6 +32,7 @@
 #include <Inventor/details/SoLineDetail.h>
 #include <Inventor/elements/SoCoordinateElement.h>
 #include <Inventor/elements/SoDepthBufferElement.h>
+#include <Inventor/elements/SoDrawStyleElement.h>
 #include <Inventor/elements/SoLazyElement.h>
 #include <Inventor/elements/SoMaterialBindingElement.h>
 #include <Inventor/elements/SoOverrideElement.h>
@@ -52,6 +53,30 @@
 
 
 using namespace PartGui;
+
+SO_NODE_SOURCE(SoBrepEdgeHider)
+
+void SoBrepEdgeHider::initClass()
+{
+    SO_NODE_INIT_CLASS(SoBrepEdgeHider, SoNode, "Node");
+}
+
+SoBrepEdgeHider::SoBrepEdgeHider()
+{
+    SO_NODE_CONSTRUCTOR(SoBrepEdgeHider);
+}
+
+void SoBrepEdgeHider::GLRender(SoGLRenderAction* action)
+{
+    // Unconditional, unlike SoDrawStyle, so that no ancestor override can put
+    // the geometry back on screen - see the class documentation.
+    //
+    // SoDrawStyleElement is deliberately left alone: only the
+    // SoShapeStyleElement flag gates SoShape::shouldGLRender(), and leaving the
+    // draw style where pcLineStyle put it keeps the line width and pattern that
+    // the selection overlay inherits.
+    SoShapeStyleElement::setDrawStyle(action->getState(), SoDrawStyleElement::INVISIBLE);
+}
 
 SO_NODE_SOURCE(SoBrepEdgeSet)
 
@@ -79,6 +104,23 @@ static void applyOverlayPrimitiveState(SoState* state, SoNode* node)
     SoTextureEnabledElement::set(state, node, false);
     SoMaterialBindingElement::set(state, SoMaterialBindingElement::OVERALL);
     SoOverrideElement::setMaterialBindingOverride(state, node, true);
+
+    // In the "Shaded" display mode the edges sit behind an SoBrepEdgeHider, so
+    // that they remain pickable without being drawn.  That would swallow the
+    // overlay too - SoShape::shouldGLRender() bails out on
+    // SoShapeStyleElement::INVISIBLE before drawing anything - leaving hover and
+    // selection without any feedback at all.  Clear the flag again for the
+    // overlay pass; SoDrawStyleElement::set() does that on the way, since it
+    // forwards to SoShapeStyleElement::setDrawStyle().
+    //
+    // Ordering is what makes this safe.  The hider runs once, on the way down to
+    // the edge set; this runs afterwards, inside the state push/pop that
+    // renderOverlayLines() wraps around the overlay.  So the overlay draws and
+    // the pop puts the INVISIBLE flag straight back: the base edge geometry
+    // stays hidden and "Shaded" still shows no edge outlines while nothing is
+    // hovered or selected.  Every other display mode already has a LINES draw
+    // style here, so for them this is a no-op.
+    SoDrawStyleElement::set(state, node, SoDrawStyleElement::LINES);
 }
 
 static void applyOverlayDepthState(SoState* state, OverlayDepthMode depthMode)

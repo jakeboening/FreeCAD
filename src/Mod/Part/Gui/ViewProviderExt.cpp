@@ -472,19 +472,25 @@ void ViewProviderPartExt::attach(App::DocumentObject* pcFeat)
     pcNormalRoot->setName("NormalRoot");
     auto* pcFlatRoot = new SoSeparator();
     pcFlatRoot->setName("FlatRoot");
+    auto* pcShadedRoot = new SoSeparator();
+    pcShadedRoot->setName("ShadedRoot");
     auto* pcWireframeRoot = new SoSeparator();
     pcWireframeRoot->setName("WireframeRoot");
     auto* pcPointsRoot = new SoSeparator();
     pcPointsRoot->setName("PointsRoot");
     auto* wireframe = new SoSeparator();
+    auto* hiddenWireframe = new SoSeparator();
 
     // Must turn off all intermediate render caching, and let pcRoot to handle
     // cache without interference.
-    pcNormalRoot->renderCaching = pcFlatRoot->renderCaching = pcWireframeRoot->renderCaching
-        = pcPointsRoot->renderCaching = wireframe->renderCaching = SoSeparator::OFF;
+    pcNormalRoot->renderCaching = pcFlatRoot->renderCaching = pcShadedRoot->renderCaching
+        = pcWireframeRoot->renderCaching = pcPointsRoot->renderCaching
+        = wireframe->renderCaching = hiddenWireframe->renderCaching = SoSeparator::OFF;
 
-    pcNormalRoot->boundingBoxCaching = pcFlatRoot->boundingBoxCaching = pcWireframeRoot->boundingBoxCaching
-        = pcPointsRoot->boundingBoxCaching = wireframe->boundingBoxCaching = SoSeparator::OFF;
+    pcNormalRoot->boundingBoxCaching = pcFlatRoot->boundingBoxCaching
+        = pcShadedRoot->boundingBoxCaching = pcWireframeRoot->boundingBoxCaching
+        = pcPointsRoot->boundingBoxCaching = wireframe->boundingBoxCaching
+        = hiddenWireframe->boundingBoxCaching = SoSeparator::OFF;
 
     // Avoid any Z-buffer artifacts, so that the lines always appear on top of the faces
     // The correct order is Edges, Polygon offset, Faces.
@@ -516,6 +522,50 @@ void ViewProviderPartExt::attach(App::DocumentObject* pcFeat)
     pcFlatRoot->addChild(normb);
     pcFlatRoot->addChild(faceset);
 
+    // The same edges as 'wireframe', but hidden.
+    //
+    // SoSwitch skips its non-selected children for *every* action, ray picking
+    // included, so geometry that is not below the active display mask mode
+    // cannot be picked at all: no SoLineDetail is produced and the edge/face
+    // ambiguity resolution in SoFCUnifiedSelection never even engages.  Edge
+    // selection in "Shaded" is therefore not a visibility problem but a
+    // reachability one - the edges have to be traversed and then hidden, rather
+    // than left out of the graph.
+    //
+    // SoBrepEdgeHider does precisely that: it raises SoShapeStyleElement's
+    // INVISIBLE flag, which SoShape::shouldGLRender() returns early on, while
+    // nothing on the pick path consults it - SoShape::shouldRayPick() looks at
+    // SoPickStyleElement alone.  See its declaration for why it is a node of its
+    // own rather than an SoDrawStyle set to INVISIBLE, which FreeCAD's "Hidden
+    // Line" draw style would override back into visibility.
+    //
+    // pcLineStyle stays in front of it so the highlight and selection overlays
+    // keep the user's LineWidth and DrawStyle.
+    //
+    // The very same 'lineset' instance is reused, never a copy.  Preselection
+    // applies the highlight action to the path of the picked point, so a second
+    // SoBrepEdgeSet would capture the highlight for itself and nothing the user
+    // can see would light up.
+    hiddenWireframe->setName("HiddenEdge");
+    hiddenWireframe->addChild(pcLineStyle);
+    hiddenWireframe->addChild(new SoBrepEdgeHider());
+    hiddenWireframe->addChild(lineset);
+
+    // faces, plus the edges present but invisible so they stay selectable
+    //
+    // "Shaded" gets a root of its own rather than the edges being appended to
+    // pcFlatRoot, because pcFlatRoot is multiply parented: it is a child of
+    // pcNormalRoot as well.  Edges added inside it would be traversed twice in
+    // "Flat Lines" - drawn and picked twice - and on the wrong side of the
+    // polygon offset.
+    //
+    // The offset is the same node "Flat Lines" uses, and for the same reason: it
+    // pushes the faces back so that the selection overlay, which is drawn with a
+    // LEQUAL depth test, does not stitch against the face it borders.
+    pcShadedRoot->addChild(offset);
+    pcShadedRoot->addChild(pcFlatRoot);
+    pcShadedRoot->addChild(hiddenWireframe);
+
     // edges and points
     pcWireframeRoot->addChild(wireframe);
     pcWireframeRoot->addChild(pcPointsRoot);
@@ -531,7 +581,7 @@ void ViewProviderPartExt::attach(App::DocumentObject* pcFeat)
 
     // putting all together with the switch
     addDisplayMaskMode(pcNormalRoot, "Flat Lines");
-    addDisplayMaskMode(pcFlatRoot, "Shaded");
+    addDisplayMaskMode(pcShadedRoot, "Shaded");
     addDisplayMaskMode(pcWireframeRoot, "Wireframe");
     addDisplayMaskMode(pcPointsRoot, "Point");
 }
